@@ -1,9 +1,10 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 """
-Pharmacy Management System - Production Complete
+PHARMACY MANAGEMENT SYSTEM - COMPLETE PRODUCTION VERSION
 Copyright © Isaac Madungwe 2026-2030
-All features: AI Assistant, Inventory, Sales, Prescriptions, Patients, Suppliers,
-Staff, Reports, Audit, Loyalty, Appointments, Drug Interactions, Forecasting.
+All features: Inventory (batches, FEFO), Sales, Returns, Prescriptions, Patients,
+Suppliers, Staff, Reports, Audit, Loyalty, Appointments, Drug Interactions,
+Stock Forecasting, AI Assistant, Label Printing, and more.
 """
 
 import os
@@ -15,8 +16,7 @@ import shutil
 import sqlite3
 import logging
 from datetime import datetime, timedelta, date
-from typing import Dict, Optional, List, Tuple
-from difflib import get_close_matches
+from typing import Dict, Optional, List
 import numpy as np
 
 # ==================== DEPENDENCY CHECK ====================
@@ -33,9 +33,9 @@ try:
     from PIL import Image
     from werkzeug.security import generate_password_hash, check_password_hash
 except ImportError as e:
-    print(f"Missing required library: {e}")
-    print("Please run: pip install streamlit pandas bcrypt plotly fpdf qrcode python-barcode Pillow werkzeug numpy")
-    sys.exit(1)
+    st.error(f"Missing required library: {e}")
+    st.info("Run: pip install streamlit pandas bcrypt plotly fpdf qrcode python-barcode Pillow werkzeug numpy")
+    st.stop()
 
 # ==================== CONFIGURATION ====================
 DB_PATH = "pharmacy_management.db"
@@ -44,6 +44,7 @@ LOGIN_ATTEMPT_LIMIT = 5
 LOGIN_LOCKOUT_SECONDS = 300
 
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "Admin@123456")
+RESET_SECRET = os.environ.get("RESET_SECRET", "reset123")  # emergency reset
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -59,7 +60,7 @@ def get_db_connection():
 def init_db():
     with get_db_connection() as conn:
         cur = conn.cursor()
-        # ========== ALL TABLES ==========
+        # Tables
         cur.execute("CREATE TABLE IF NOT EXISTS roles (id INTEGER PRIMARY KEY, name TEXT UNIQUE, permissions TEXT)")
         cur.execute("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, username TEXT UNIQUE, password_hash TEXT, full_name TEXT, email TEXT, role_id INTEGER, is_active INTEGER DEFAULT 1, must_change_password INTEGER DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(role_id) REFERENCES roles(id))")
         cur.execute("CREATE TABLE IF NOT EXISTS categories (id INTEGER PRIMARY KEY, name TEXT UNIQUE, description TEXT)")
@@ -86,21 +87,31 @@ def init_db():
         cur.execute("CREATE TABLE IF NOT EXISTS appointments (id INTEGER PRIMARY KEY, patient_id INTEGER, appointment_date DATE, appointment_time TIME, purpose TEXT, status TEXT DEFAULT 'scheduled', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(patient_id) REFERENCES patients(id))")
         cur.execute("CREATE TABLE IF NOT EXISTS drug_interactions (id INTEGER PRIMARY KEY, medicine1_id INTEGER, medicine2_id INTEGER, severity TEXT, description TEXT, FOREIGN KEY(medicine1_id) REFERENCES medicines(id), FOREIGN KEY(medicine2_id) REFERENCES medicines(id))")
         cur.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
-        # ========== DEFAULT DATA ==========
+
+        # Default roles
         roles = [("Admin", '{"all":true}'), ("Manager", '{"medicines":true,"inventory":true,"suppliers":true,"reports":true,"staff":true,"audit":true}'), ("Pharmacist", '{"prescriptions":true,"inventory_view":true,"sales_view":true,"label_print":true}'), ("Cashier", '{"sales":true,"patients_view":true}')]
         for name, perms in roles:
             cur.execute("INSERT OR IGNORE INTO roles (name, permissions) VALUES (?,?)", (name, perms))
+
+        # Admin user creation
         admin_role = cur.execute("SELECT id FROM roles WHERE name='Admin'").fetchone()
-        if admin_role and not cur.execute("SELECT id FROM users WHERE username='admin'").fetchone():
+        user_count = cur.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        if user_count == 0 and admin_role:
             cur.execute("INSERT INTO users (username, password_hash, full_name, email, role_id, must_change_password) VALUES (?,?,?,?,?,1)", ("admin", generate_password_hash(ADMIN_PASSWORD), "System Administrator", "admin@pharmacy.com", admin_role[0]))
+        elif admin_role and not cur.execute("SELECT id FROM users WHERE username='admin'").fetchone():
+            cur.execute("INSERT INTO users (username, password_hash, full_name, email, role_id, must_change_password) VALUES (?,?,?,?,?,1)", ("admin", generate_password_hash(ADMIN_PASSWORD), "System Administrator", "admin@pharmacy.com", admin_role[0]))
+
+        # Default categories
         categories = ["Antibiotics","Analgesics","Antipyretics","Vitamins","Antihistamines","Dermatologicals"]
         for cat in categories:
             cur.execute("INSERT OR IGNORE INTO categories (name) VALUES (?)", (cat,))
-        default_settings = {"pharmacy_name":"HealthPlus Pharmacy","pharmacy_address":"123 Main Street","pharmacy_phone":"+1 234 567 8900","pharmacy_email":"info@healthplus.com","tax_number":"TAX123456","pharmacist_license":"PHARM-7890","receipt_footer":"Thank you!","loyalty_rate":"5","gst_rate":"5","cgst_rate":"2.5","sgst_rate":"2.5"}
+
+        # Default settings
+        default_settings = {"pharmacy_name":"HealthPlus Pharmacy","pharmacy_address":"123 Main Street","pharmacy_phone":"+1 234 567 8900","pharmacy_email":"info@healthplus.com","tax_number":"TAX123456","pharmacist_license":"PHARM-7890","receipt_footer":"Thank you!","loyalty_rate":"5","gst_rate":"5"}
         for key,val in default_settings.items():
             cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?,?)", (key, val))
+
         conn.commit()
-        # No default drug interaction inserted (to avoid foreign key errors). User can add via UI.
 
 init_db()
 
@@ -283,47 +294,6 @@ def ai_response(q):
     return "I can help with medicine suggestions, stock alerts, expiries. Try 'fever' or 'low stock'."
 
 # ==================== PAGE FUNCTIONS ====================
-def render_login_page():
-    st.set_page_config(page_title="Pharmacy System", layout="wide")
-    st.title("🏥 Pharmacy Management System")
-    c1,c2,c3 = st.columns([1,2,1])
-    with c2:
-        st.image("https://img.icons8.com/fluency/96/pill.png", width=100)
-        st.subheader("Secure Login")
-        uname = st.text_input("Username")
-        pwd = st.text_input("Password", type="password")
-        if st.button("Login", type="primary"):
-            if uname and pwd:
-                user = login_user(uname, pwd)
-                if user:
-                    st.session_state.logged_in=True
-                    st.session_state.user=user
-                    st.session_state.login_time=datetime.now()
-                    if user.get('must_change_password'):
-                        st.session_state.must_change_password=True
-                    st.rerun()
-                else:
-                    st.error("Invalid credentials")
-            else:
-                st.warning("Enter both fields")
-
-def render_change_password():
-    st.title("🔐 Change Required Password")
-    st.warning("You must change your default password.")
-    new = st.text_input("New Password", type="password")
-    conf = st.text_input("Confirm", type="password")
-    if st.button("Update"):
-        if new!=conf:
-            st.error("Passwords do not match")
-        else:
-            try:
-                change_password(st.session_state.user['id'], new)
-                st.session_state.must_change_password=False
-                st.success("Password changed. Please log in again.")
-                logout_user()
-            except ValueError as e:
-                st.error(str(e))
-
 def render_dashboard():
     require_permission("all")
     st.title("📊 Dashboard")
@@ -912,12 +882,60 @@ def render_settings():
 def main():
     init_db()
     if not st.session_state.get('logged_in'):
-        render_login_page()
+        st.set_page_config(page_title="Pharmacy System", layout="wide")
+        # Emergency password reset via URL parameter
+        qp = st.query_params
+        if "reset" in qp and qp["reset"] == RESET_SECRET:
+            with get_db_connection() as conn:
+                admin = conn.execute("SELECT id FROM users WHERE username='admin'").fetchone()
+                if admin:
+                    conn.execute("UPDATE users SET password_hash=?, must_change_password=1 WHERE id=?", (generate_password_hash(ADMIN_PASSWORD), admin[0]))
+                    conn.commit()
+                    st.success("Admin password reset. Please log in and change it immediately.")
+                    st.stop()
+        # Login form
+        st.title("🏥 Pharmacy Management System")
+        c1,c2,c3 = st.columns([1,2,1])
+        with c2:
+            st.image("https://img.icons8.com/fluency/96/pill.png", width=100)
+            st.subheader("Secure Login")
+            uname = st.text_input("Username")
+            pwd = st.text_input("Password", type="password")
+            if st.button("Login", type="primary"):
+                if uname and pwd:
+                    user = login_user(uname, pwd)
+                    if user:
+                        st.session_state.logged_in = True
+                        st.session_state.user = user
+                        st.session_state.login_time = datetime.now()
+                        if user.get('must_change_password'):
+                            st.session_state.must_change_password = True
+                        st.rerun()
+                    else:
+                        st.error("Invalid credentials")
+                else:
+                    st.warning("Enter both fields")
         return
+    # Session timeout and forced password change
     check_session_timeout()
     if st.session_state.user.get('must_change_password'):
-        render_change_password()
+        st.title("🔐 Change Required Password")
+        st.warning("You must change your default password.")
+        new = st.text_input("New Password", type="password")
+        conf = st.text_input("Confirm", type="password")
+        if st.button("Update"):
+            if new != conf:
+                st.error("Passwords do not match")
+            else:
+                try:
+                    change_password(st.session_state.user['id'], new)
+                    st.session_state.must_change_password = False
+                    st.success("Password changed. Please log in again.")
+                    logout_user()
+                except ValueError as e:
+                    st.error(str(e))
         return
+    # Main app after login
     st.set_page_config(page_title="Pharmacy Management System", layout="wide", page_icon="💊")
     st.sidebar.image("https://img.icons8.com/fluency/96/pill.png", width=80)
     st.sidebar.title(f"Welcome, {st.session_state.user['full_name']}")
@@ -938,25 +956,27 @@ def main():
         elif m=="Audit Logs" and (user_perms.get('all') or user_perms.get('audit')): allowed.append(m)
         elif m=="Advanced Features" and (user_perms.get('all') or user_perms.get('advanced')): allowed.append(m)
     for m in allowed:
-        if st.sidebar.button(m, use_container_width=True): st.session_state.page = m
-    if st.sidebar.button("🚪 Logout", use_container_width=True): logout_user()
+        if st.sidebar.button(m, use_container_width=True):
+            st.session_state.page = m
+    if st.sidebar.button("🚪 Logout", use_container_width=True):
+        logout_user()
     page = st.session_state.get('page', 'Dashboard')
-    if page=="Dashboard": render_dashboard()
-    elif page=="Medicines": render_medicines()
-    elif page=="Inventory": render_inventory()
-    elif page=="Patients": render_patients()
-    elif page=="Prescriptions": render_prescriptions()
-    elif page=="Sales & Billing": render_sales_billing()
-    elif page=="Sales Returns": render_sales_returns()
-    elif page=="Label Printing": render_label_printing()
-    elif page=="Suppliers": render_suppliers()
-    elif page=="Reports": render_reports()
-    elif page=="Staff Management": render_staff_management()
-    elif page=="Notifications": render_notifications()
-    elif page=="Audit Logs": render_audit_logs()
-    elif page=="Advanced Features": render_advanced_features()
-    elif page=="AI Assistant": render_ai_assistant()
-    elif page=="Settings": render_settings()
+    if page == "Dashboard": render_dashboard()
+    elif page == "Medicines": render_medicines()
+    elif page == "Inventory": render_inventory()
+    elif page == "Patients": render_patients()
+    elif page == "Prescriptions": render_prescriptions()
+    elif page == "Sales & Billing": render_sales_billing()
+    elif page == "Sales Returns": render_sales_returns()
+    elif page == "Label Printing": render_label_printing()
+    elif page == "Suppliers": render_suppliers()
+    elif page == "Reports": render_reports()
+    elif page == "Staff Management": render_staff_management()
+    elif page == "Notifications": render_notifications()
+    elif page == "Audit Logs": render_audit_logs()
+    elif page == "Advanced Features": render_advanced_features()
+    elif page == "AI Assistant": render_ai_assistant()
+    elif page == "Settings": render_settings()
     else: render_dashboard()
 
 if __name__ == "__main__":
