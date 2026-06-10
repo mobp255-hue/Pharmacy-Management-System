@@ -1,7 +1,7 @@
 """
-Pharmacy Management System - Production Complete
-All features implemented, PostgreSQL ready, full security.
-Deploy to Streamlit Cloud with PostgreSQL (Neon/Supabase/Aiven).
+Pharmacy Management System - Complete Production Version
+Works with PostgreSQL (recommended) or SQLite (fallback)
+Deploy to Streamlit Cloud or run locally.
 """
 
 import os
@@ -17,25 +17,21 @@ import logging
 # ==================== CONFIGURATION ====================
 try:
     from streamlit.runtime.secrets import secrets as streamlit_secrets
-    DATABASE_URL = streamlit_secrets.get("DATABASE_URL", os.environ.get("DATABASE_URL"))
-    ADMIN_PASSWORD = streamlit_secrets.get("ADMIN_PASSWORD", os.environ.get("ADMIN_PASSWORD"))
-    SECRET_KEY = streamlit_secrets.get("SECRET_KEY", os.environ.get("SECRET_KEY", "change-this"))
+    DATABASE_URL = streamlit_secrets.get("DATABASE_URL", os.environ.get("DATABASE_URL", ""))
+    ADMIN_PASSWORD = streamlit_secrets.get("ADMIN_PASSWORD", os.environ.get("ADMIN_PASSWORD", ""))
+    SECRET_KEY = streamlit_secrets.get("SECRET_KEY", os.environ.get("SECRET_KEY", "change-this-in-production"))
     SESSION_TIMEOUT = int(streamlit_secrets.get("SESSION_TIMEOUT", os.environ.get("SESSION_TIMEOUT", "1800")))
     LOGIN_ATTEMPT_LIMIT = int(streamlit_secrets.get("LOGIN_ATTEMPT_LIMIT", os.environ.get("LOGIN_ATTEMPT_LIMIT", "5")))
     LOGIN_LOCKOUT_SECONDS = int(streamlit_secrets.get("LOGIN_LOCKOUT_SECONDS", os.environ.get("LOGIN_LOCKOUT_SECONDS", "300")))
 except ImportError:
     from dotenv import load_dotenv
     load_dotenv()
-    DATABASE_URL = os.environ.get("DATABASE_URL")
-    ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD")
-    SECRET_KEY = os.environ.get("SECRET_KEY", "change-this")
+    DATABASE_URL = os.environ.get("DATABASE_URL", "")
+    ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
+    SECRET_KEY = os.environ.get("SECRET_KEY", "change-this-in-production")
     SESSION_TIMEOUT = int(os.environ.get("SESSION_TIMEOUT", "1800"))
     LOGIN_ATTEMPT_LIMIT = int(os.environ.get("LOGIN_ATTEMPT_LIMIT", "5"))
     LOGIN_LOCKOUT_SECONDS = int(os.environ.get("LOGIN_LOCKOUT_SECONDS", "300"))
-
-if not DATABASE_URL:
-    DATABASE_URL = "sqlite:///pharmacy_local.db"
-    logger.warning("No DATABASE_URL found, using SQLite (not for production)")
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -53,21 +49,26 @@ from barcode.writer import ImageWriter
 from PIL import Image
 from werkzeug.security import generate_password_hash, check_password_hash
 
-# Database
-if DATABASE_URL.startswith("postgresql"):
-    import psycopg2
-    from sqlalchemy import create_engine, text
-    from sqlalchemy.pool import QueuePool
+# ==================== DATABASE SETUP ====================
+from sqlalchemy import create_engine, text
+from sqlalchemy.pool import QueuePool, StaticPool
+
+if DATABASE_URL and (DATABASE_URL.startswith("postgresql") or DATABASE_URL.startswith("postgres")):
     engine = create_engine(DATABASE_URL, poolclass=QueuePool, pool_size=10, max_overflow=20, pool_pre_ping=True)
+    logger.info("Connected to PostgreSQL")
+elif DATABASE_URL and DATABASE_URL.startswith("sqlite"):
+    engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    logger.info("Connected to SQLite file")
 else:
-    from sqlalchemy import create_engine, text
-    engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+    if not DATABASE_URL:
+        logger.warning("DATABASE_URL not set. Using in-memory SQLite. Data will NOT persist!")
+    else:
+        logger.warning(f"Unsupported DATABASE_URL: {DATABASE_URL}. Using in-memory SQLite.")
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool)
 
 # ==================== DATABASE INITIALIZATION ====================
 def init_db():
-    """Create all tables and default data."""
     with engine.connect() as conn:
-        # Roles
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS roles (
                 id SERIAL PRIMARY KEY,
@@ -75,7 +76,6 @@ def init_db():
                 permissions TEXT
             )
         """))
-        # Users
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS users (
                 id SERIAL PRIMARY KEY,
@@ -89,7 +89,6 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """))
-        # Categories
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS categories (
                 id SERIAL PRIMARY KEY,
@@ -97,7 +96,6 @@ def init_db():
                 description TEXT
             )
         """))
-        # Medicines
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS medicines (
                 id SERIAL PRIMARY KEY,
@@ -113,7 +111,6 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """))
-        # Batches
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS batches (
                 id SERIAL PRIMARY KEY,
@@ -128,7 +125,6 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """))
-        # Patients
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS patients (
                 id SERIAL PRIMARY KEY,
@@ -147,7 +143,6 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """))
-        # Prescriptions
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS prescriptions (
                 id SERIAL PRIMARY KEY,
@@ -162,7 +157,6 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """))
-        # Prescription items
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS prescription_items (
                 id SERIAL PRIMARY KEY,
@@ -174,7 +168,6 @@ def init_db():
                 quantity INTEGER NOT NULL
             )
         """))
-        # Sales
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS sales (
                 id SERIAL PRIMARY KEY,
@@ -191,7 +184,6 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """))
-        # Sale items
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS sale_items (
                 id SERIAL PRIMARY KEY,
@@ -203,7 +195,6 @@ def init_db():
                 total REAL NOT NULL
             )
         """))
-        # Sales returns
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS sales_returns (
                 id SERIAL PRIMARY KEY,
@@ -216,7 +207,6 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """))
-        # Suppliers
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS suppliers (
                 id SERIAL PRIMARY KEY,
@@ -230,7 +220,6 @@ def init_db():
                 is_active INTEGER DEFAULT 1
             )
         """))
-        # Purchase orders
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS purchase_orders (
                 id SERIAL PRIMARY KEY,
@@ -243,7 +232,6 @@ def init_db():
                 created_by INTEGER REFERENCES users(id)
             )
         """))
-        # Staff attendance
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS staff_attendance (
                 id SERIAL PRIMARY KEY,
@@ -255,7 +243,6 @@ def init_db():
                 UNIQUE(user_id, date)
             )
         """))
-        # Notifications
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS notifications (
                 id SERIAL PRIMARY KEY,
@@ -266,7 +253,6 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """))
-        # Audit logs
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS audit_logs (
                 id SERIAL PRIMARY KEY,
@@ -277,7 +263,6 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """))
-        # Loyalty points
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS loyalty_points (
                 id SERIAL PRIMARY KEY,
@@ -286,7 +271,6 @@ def init_db():
                 redeemed INTEGER DEFAULT 0
             )
         """))
-        # Appointments
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS appointments (
                 id SERIAL PRIMARY KEY,
@@ -298,7 +282,6 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """))
-        # Drug interactions
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS drug_interactions (
                 id SERIAL PRIMARY KEY,
@@ -308,7 +291,6 @@ def init_db():
                 description TEXT
             )
         """))
-        # Settings
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
@@ -318,7 +300,7 @@ def init_db():
         """))
         conn.commit()
 
-        # Insert default roles
+        # Default roles
         roles = [
             ("Admin", '{"all": true}'),
             ("Manager", '{"medicines":true,"inventory":true,"suppliers":true,"reports":true,"staff":true,"audit":true}'),
@@ -329,7 +311,7 @@ def init_db():
             conn.execute(text("INSERT INTO roles (name, permissions) VALUES (:n, :p) ON CONFLICT (name) DO NOTHING"), {"n": name, "p": perms})
         conn.commit()
 
-        # Create admin user if ADMIN_PASSWORD provided
+        # Admin user
         if ADMIN_PASSWORD:
             admin_role = conn.execute(text("SELECT id FROM roles WHERE name = 'Admin'")).fetchone()
             if admin_role:
@@ -341,9 +323,6 @@ def init_db():
                     """), {"pwd": generate_password_hash(ADMIN_PASSWORD), "role": admin_role[0]})
                     conn.commit()
                     logger.info("Admin user created.")
-                else:
-                    # Ensure admin has must_change_password=1 if password was default? Not needed.
-                    pass
 
         # Default categories
         categories = ["Antibiotics", "Analgesics", "Antipyretics", "Vitamins", "Antihistamines", "Dermatologicals"]
@@ -472,7 +451,8 @@ def generate_barcode(data):
         code128(data, writer=ImageWriter()).write(buffer)
         buffer.seek(0)
         return Image.open(buffer)
-    except:
+    except Exception as e:
+        logger.error(f"Barcode error: {e}")
         return Image.new('RGB', (300,100), 'white')
 
 def generate_qr(data):
@@ -489,10 +469,9 @@ def create_notification(title, message, type_="info"):
 def login_user(username, password):
     try:
         with engine.connect() as conn:
-            # Check lockout
             lock = conn.execute(text("SELECT value FROM settings WHERE key = :key AND value > CURRENT_TIMESTAMP"), {"key": f"lockout_{username}"}).fetchone()
             if lock:
-                st.error("Account temporarily locked. Please try again later.")
+                st.error("Account temporarily locked.")
                 return None
             user = conn.execute(text("""
                 SELECT u.id, u.username, u.password_hash, u.full_name, u.email, u.role_id, u.must_change_password,
@@ -501,14 +480,12 @@ def login_user(username, password):
                 WHERE u.username = :uname AND u.is_active = 1
             """), {"uname": username}).fetchone()
             if user and check_password_hash(user[2], password):
-                # Reset failures
                 conn.execute(text("DELETE FROM settings WHERE key = :key"), {"key": f"failures_{username}"})
                 conn.commit()
                 log_audit(user[0], "LOGIN", f"User {username} logged in")
                 return {"id": user[0], "username": user[1], "full_name": user[3], "email": user[4],
                         "role_id": user[5], "must_change_password": user[6], "role_name": user[7], "permissions": user[8]}
             else:
-                # Increment failures
                 fail = conn.execute(text("SELECT value FROM settings WHERE key = :key"), {"key": f"failures_{username}"}).fetchone()
                 fail_count = int(fail[0]) if fail else 0
                 fail_count += 1
@@ -542,13 +519,13 @@ def check_session_timeout():
     if 'login_time' in st.session_state:
         elapsed = (datetime.utcnow() - st.session_state.login_time).total_seconds()
         if elapsed > SESSION_TIMEOUT:
-            st.warning("Session expired due to inactivity.")
+            st.warning("Session expired.")
             logout_user()
             st.stop()
     else:
         st.session_state.login_time = datetime.utcnow()
 
-# ==================== UI PAGES ====================
+# ==================== PAGE FUNCTIONS ====================
 def render_login_page():
     st.set_page_config(page_title="Pharmacy Management System", layout="wide")
     st.title("🏥 Pharmacy Management System")
@@ -596,8 +573,12 @@ def render_dashboard():
     with engine.connect() as conn:
         total_meds = conn.execute(text("SELECT COUNT(*) FROM medicines")).scalar()
         total_patients = conn.execute(text("SELECT COUNT(*) FROM patients")).scalar()
-        today_sales = conn.execute(text("SELECT COALESCE(SUM(net_amount),0) FROM sales WHERE created_at::date = CURRENT_DATE")).scalar()
-        month_sales = conn.execute(text("SELECT COALESCE(SUM(net_amount),0) FROM sales WHERE date_trunc('month', created_at) = date_trunc('month', CURRENT_DATE)")).scalar()
+        try:
+            today_sales = conn.execute(text("SELECT COALESCE(SUM(net_amount),0) FROM sales WHERE DATE(created_at) = DATE('now')")).scalar()
+            month_sales = conn.execute(text("SELECT COALESCE(SUM(net_amount),0) FROM sales WHERE strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now')")).scalar()
+        except:
+            today_sales = conn.execute(text("SELECT COALESCE(SUM(net_amount),0) FROM sales WHERE created_at::date = CURRENT_DATE")).scalar()
+            month_sales = conn.execute(text("SELECT COALESCE(SUM(net_amount),0) FROM sales WHERE date_trunc('month', created_at) = date_trunc('month', CURRENT_DATE)")).scalar()
     c1,c2,c3,c4 = st.columns(4)
     c1.metric("💊 Medicines", total_meds)
     c2.metric("👥 Patients", total_patients)
@@ -611,25 +592,19 @@ def render_dashboard():
     if not exp.empty:
         st.error(f"⚠️ Expiring soon: {len(exp)} batches within 30 days")
 
-    # Sales trend last 7 days
-    with engine.connect() as conn:
-        trend = conn.execute(text("""
-            SELECT created_at::date as date, COALESCE(SUM(net_amount),0) as sales
-            FROM sales WHERE created_at >= CURRENT_DATE - INTERVAL '7 days'
-            GROUP BY created_at::date ORDER BY date
-        """)).fetchall()
+    try:
+        with engine.connect() as conn:
+            trend = conn.execute(text("SELECT DATE(created_at) as date, COALESCE(SUM(net_amount),0) as sales FROM sales WHERE created_at >= DATE('now', '-7 days') GROUP BY DATE(created_at) ORDER BY date")).fetchall()
+    except:
+        with engine.connect() as conn:
+            trend = conn.execute(text("SELECT created_at::date as date, COALESCE(SUM(net_amount),0) as sales FROM sales WHERE created_at >= CURRENT_DATE - INTERVAL '7 days' GROUP BY created_at::date ORDER BY date")).fetchall()
     if trend:
         df = pd.DataFrame([{"date":r[0], "sales":r[1]} for r in trend])
         fig = px.line(df, x='date', y='sales', title='Last 7 Days Sales')
         st.plotly_chart(fig, use_container_width=True)
 
-    # Top selling medicines
     with engine.connect() as conn:
-        top = conn.execute(text("""
-            SELECT m.name, SUM(si.quantity) as sold
-            FROM sale_items si JOIN medicines m ON si.medicine_id = m.id
-            GROUP BY si.medicine_id ORDER BY sold DESC LIMIT 5
-        """)).fetchall()
+        top = conn.execute(text("SELECT m.name, SUM(si.quantity) as sold FROM sale_items si JOIN medicines m ON si.medicine_id = m.id GROUP BY si.medicine_id ORDER BY sold DESC LIMIT 5")).fetchall()
     if top:
         df_top = pd.DataFrame([{"name":r[0], "sold":r[1]} for r in top])
         fig2 = px.bar(df_top, x='name', y='sold', title='Top Selling Medicines')
@@ -640,26 +615,17 @@ def render_medicines():
     st.title("💊 Medicines Management")
     tab1, tab2, tab3 = st.tabs(["Medicine List", "Add/Edit Medicine", "Categories"])
     with tab1:
-        search = st.text_input("Search by name, generic, barcode")
+        search = st.text_input("Search")
         page = st.number_input("Page", min_value=1, value=1, step=1)
         per_page = 20
         offset = (page-1)*per_page
         with engine.connect() as conn:
             if search:
                 count = conn.execute(text("SELECT COUNT(*) FROM medicines WHERE name ILIKE :s OR generic_name ILIKE :s OR barcode ILIKE :s"), {"s": f"%{search}%"}).scalar()
-                rows = conn.execute(text("""
-                    SELECT m.*, c.name as category_name
-                    FROM medicines m LEFT JOIN categories c ON m.category_id = c.id
-                    WHERE m.name ILIKE :s OR m.generic_name ILIKE :s OR m.barcode ILIKE :s
-                    LIMIT :lim OFFSET :off
-                """), {"s": f"%{search}%", "lim": per_page, "off": offset}).fetchall()
+                rows = conn.execute(text("SELECT m.*, c.name as category_name FROM medicines m LEFT JOIN categories c ON m.category_id = c.id WHERE m.name ILIKE :s OR m.generic_name ILIKE :s OR m.barcode ILIKE :s LIMIT :lim OFFSET :off"), {"s": f"%{search}%", "lim": per_page, "off": offset}).fetchall()
             else:
                 count = conn.execute(text("SELECT COUNT(*) FROM medicines")).scalar()
-                rows = conn.execute(text("""
-                    SELECT m.*, c.name as category_name
-                    FROM medicines m LEFT JOIN categories c ON m.category_id = c.id
-                    LIMIT :lim OFFSET :off
-                """), {"lim": per_page, "off": offset}).fetchall()
+                rows = conn.execute(text("SELECT m.*, c.name as category_name FROM medicines m LEFT JOIN categories c ON m.category_id = c.id LIMIT :lim OFFSET :off"), {"lim": per_page, "off": offset}).fetchall()
         st.write(f"Total: {count}")
         if rows:
             df = pd.DataFrame([dict(r._mapping) for r in rows])
@@ -699,17 +665,10 @@ def render_medicines():
         if st.button("Save Medicine"):
             with engine.connect() as conn:
                 if 'edit_medicine' in st.session_state:
-                    conn.execute(text("""
-                        UPDATE medicines SET name=:n, generic_name=:g, category_id=:c, barcode=:b,
-                        manufacturer=:m, unit_price=:p, reorder_level=:r, current_stock=:s, description=:d
-                        WHERE id=:id
-                    """), {"n":name,"g":generic,"c":category,"b":barcode_val,"m":manufacturer,"p":price,"r":reorder,"s":stock,"d":desc,"id":med['id']})
+                    conn.execute(text("UPDATE medicines SET name=:n, generic_name=:g, category_id=:c, barcode=:b, manufacturer=:m, unit_price=:p, reorder_level=:r, current_stock=:s, description=:d WHERE id=:id"), {"n":name,"g":generic,"c":category,"b":barcode_val,"m":manufacturer,"p":price,"r":reorder,"s":stock,"d":desc,"id":med['id']})
                     del st.session_state.edit_medicine
                 else:
-                    conn.execute(text("""
-                        INSERT INTO medicines (name, generic_name, category_id, barcode, manufacturer, unit_price, reorder_level, current_stock, description)
-                        VALUES (:n,:g,:c,:b,:m,:p,:r,:s,:d)
-                    """), {"n":name,"g":generic,"c":category,"b":barcode_val,"m":manufacturer,"p":price,"r":reorder,"s":stock,"d":desc})
+                    conn.execute(text("INSERT INTO medicines (name, generic_name, category_id, barcode, manufacturer, unit_price, reorder_level, current_stock, description) VALUES (:n,:g,:c,:b,:m,:p,:r,:s,:d)"), {"n":name,"g":generic,"c":category,"b":barcode_val,"m":manufacturer,"p":price,"r":reorder,"s":stock,"d":desc})
                 conn.commit()
             st.success("Saved")
             st.rerun()
@@ -750,16 +709,13 @@ def render_inventory():
             selling_price = st.number_input("Selling Price", min_value=0.0, value=0.0)
             if st.button("Add Stock"):
                 with engine.connect() as conn:
-                    conn.execute(text("""
-                        INSERT INTO batches (medicine_id, batch_number, quantity, expiry_date, purchase_price, selling_price)
-                        VALUES (:mid, :bn, :q, :exp, :pp, :sp)
-                    """), {"mid": med_id, "bn": batch_no, "q": qty, "exp": expiry, "pp": purchase_price, "sp": selling_price})
+                    conn.execute(text("INSERT INTO batches (medicine_id, batch_number, quantity, expiry_date, purchase_price, selling_price) VALUES (:mid, :bn, :q, :exp, :pp, :sp)"), {"mid": med_id, "bn": batch_no, "q": qty, "exp": expiry, "pp": purchase_price, "sp": selling_price})
                     conn.execute(text("UPDATE medicines SET current_stock = current_stock + :q WHERE id = :mid"), {"q": qty, "mid": med_id})
                     conn.execute(text("INSERT INTO inventory_transactions (medicine_id, transaction_type, quantity, notes) VALUES (:mid, 'Stock In', :q, :n)"), {"mid": med_id, "q": qty, "n": notes})
                     conn.commit()
                 st.success("Stock added")
                 st.rerun()
-        else:  # Stock Out
+        else:
             if st.button("Process Sale (Deduct Stock)"):
                 try:
                     batches = get_best_batch(med_id, qty)
@@ -775,11 +731,7 @@ def render_inventory():
                     st.error(str(e))
     with tab2:
         with engine.connect() as conn:
-            batches = conn.execute(text("""
-                SELECT b.*, m.name as medicine_name
-                FROM batches b JOIN medicines m ON b.medicine_id = m.id
-                ORDER BY b.expiry_date
-            """)).fetchall()
+            batches = conn.execute(text("SELECT b.*, m.name as medicine_name FROM batches b JOIN medicines m ON b.medicine_id = m.id ORDER BY b.expiry_date")).fetchall()
         if batches:
             df = pd.DataFrame([dict(r._mapping) for r in batches])
             st.dataframe(df[['medicine_name','batch_number','quantity','expiry_date','purchase_price','selling_price']], use_container_width=True)
@@ -823,11 +775,7 @@ def render_patients():
             if first and last:
                 pid = f"PAT{datetime.now().strftime('%Y%m%d%H%M%S')}"
                 with engine.connect() as conn:
-                    conn.execute(text("""
-                        INSERT INTO patients (patient_id, first_name, last_name, date_of_birth, gender, phone, email, address,
-                        insurance_provider, insurance_number, blood_group, allergies)
-                        VALUES (:pid, :fn, :ln, :dob, :gen, :ph, :em, :addr, :ins, :insnum, :bg, :all)
-                    """), {"pid":pid,"fn":first,"ln":last,"dob":dob,"gen":gender,"ph":phone,"em":email,"addr":address,"ins":insurance_provider,"insnum":insurance_number,"bg":blood_group,"all":allergies})
+                    conn.execute(text("INSERT INTO patients (patient_id, first_name, last_name, date_of_birth, gender, phone, email, address, insurance_provider, insurance_number, blood_group, allergies) VALUES (:pid, :fn, :ln, :dob, :gen, :ph, :em, :addr, :ins, :insnum, :bg, :all)"), {"pid":pid,"fn":first,"ln":last,"dob":dob,"gen":gender,"ph":phone,"em":email,"addr":address,"ins":insurance_provider,"insnum":insurance_number,"bg":blood_group,"all":allergies})
                     conn.commit()
                 st.success(f"Registered ID: {pid}")
                 st.rerun()
@@ -838,11 +786,7 @@ def render_prescriptions():
     tab1, tab2 = st.tabs(["Pending", "New Prescription"])
     with tab1:
         with engine.connect() as conn:
-            pending = conn.execute(text("""
-                SELECT p.*, pat.first_name, pat.last_name
-                FROM prescriptions p JOIN patients pat ON p.patient_id = pat.id
-                WHERE p.status = 'pending'
-            """)).fetchall()
+            pending = conn.execute(text("SELECT p.*, pat.first_name, pat.last_name FROM prescriptions p JOIN patients pat ON p.patient_id = pat.id WHERE p.status = 'pending'")).fetchall()
         for p in pending:
             with st.expander(f"#{p.prescription_number} - {p.first_name} {p.last_name}"):
                 st.write(f"Doctor: {p.doctor_name}, Date: {p.prescribed_date}")
@@ -878,7 +822,6 @@ def render_prescriptions():
         doctor_name = st.text_input("Doctor Name")
         prescribed_date = st.date_input("Prescribed Date", datetime.now().date())
         expiry_date = st.date_input("Expiry Date", datetime.now().date() + timedelta(days=30))
-        # Medicine items
         with engine.connect() as conn:
             all_meds = conn.execute(text("SELECT id, name FROM medicines")).fetchall()
         med_options = {m[0]: m[1] for m in all_meds}
@@ -894,14 +837,7 @@ def render_prescriptions():
         with col4:
             duration = st.text_input("Duration", key="dur_sel")
         if st.button("Add Medicine"):
-            st.session_state.prescription_items.append({
-                "medicine_id": med_sel,
-                "medicine_name": med_options[med_sel],
-                "quantity": qty,
-                "dosage": dosage,
-                "duration": duration,
-                "instructions": dosage
-            })
+            st.session_state.prescription_items.append({"medicine_id": med_sel, "medicine_name": med_options[med_sel], "quantity": qty, "dosage": dosage, "duration": duration, "instructions": dosage})
             st.rerun()
         for idx, it in enumerate(st.session_state.prescription_items):
             st.write(f"{idx+1}. {it['medicine_name']} - Qty {it['quantity']}, Dosage {it['dosage']}")
@@ -911,16 +847,10 @@ def render_prescriptions():
         if st.button("Save Prescription") and patient_id:
             pres_num = f"RX{datetime.now().strftime('%Y%m%d%H%M%S')}"
             with engine.connect() as conn:
-                conn.execute(text("""
-                    INSERT INTO prescriptions (prescription_number, patient_id, doctor_name, prescribed_date, expiry_date, status)
-                    VALUES (:num, :pid, :doc, :pd, :ed, 'pending')
-                """), {"num": pres_num, "pid": patient_id, "doc": doctor_name, "pd": prescribed_date, "ed": expiry_date})
+                conn.execute(text("INSERT INTO prescriptions (prescription_number, patient_id, doctor_name, prescribed_date, expiry_date, status) VALUES (:num, :pid, :doc, :pd, :ed, 'pending')"), {"num": pres_num, "pid": patient_id, "doc": doctor_name, "pd": prescribed_date, "ed": expiry_date})
                 pres_id = conn.execute(text("SELECT lastval()")).scalar()
                 for it in st.session_state.prescription_items:
-                    conn.execute(text("""
-                        INSERT INTO prescription_items (prescription_id, medicine_id, dosage, duration, instructions, quantity)
-                        VALUES (:pid, :mid, :dos, :dur, :ins, :qty)
-                    """), {"pid": pres_id, "mid": it['medicine_id'], "dos": it['dosage'], "dur": it['duration'], "ins": it['instructions'], "qty": it['quantity']})
+                    conn.execute(text("INSERT INTO prescription_items (prescription_id, medicine_id, dosage, duration, instructions, quantity) VALUES (:pid, :mid, :dos, :dur, :ins, :qty)"), {"pid": pres_id, "mid": it['medicine_id'], "dos": it['dosage'], "dur": it['duration'], "ins": it['instructions'], "qty": it['quantity']})
                 conn.commit()
             st.session_state.prescription_items = []
             st.success(f"Prescription {pres_num} created")
@@ -944,14 +874,7 @@ def render_sales_billing():
             if st.button("Add to Cart"):
                 try:
                     batches = get_best_batch(med_id, qty)
-                    st.session_state.cart.append({
-                        "medicine_id": med_id,
-                        "name": med[1],
-                        "quantity": qty,
-                        "unit_price": med[2],
-                        "total": med[2] * qty,
-                        "batches": batches
-                    })
+                    st.session_state.cart.append({"medicine_id": med_id, "name": med[1], "quantity": qty, "unit_price": med[2], "total": med[2]*qty, "batches": batches})
                     st.rerun()
                 except ValueError as e:
                     st.error(str(e))
@@ -969,7 +892,6 @@ def render_sales_billing():
             payment = st.selectbox("Payment Method", ["Cash","Card","Insurance","UPI"])
             if st.button("Complete Sale"):
                 with engine.connect() as conn:
-                    # Get patient id if provided
                     patient_id = None
                     if patient_search:
                         pat = conn.execute(text("SELECT id FROM patients WHERE patient_id = :pid"), {"pid": patient_search}).fetchone()
@@ -977,32 +899,17 @@ def render_sales_billing():
                             patient_id = pat[0]
                     invoice_no = f"INV{datetime.now().strftime('%Y%m%d%H%M%S')}"
                     loyalty_points = int(net * 0.05)
-                    conn.execute(text("""
-                        INSERT INTO sales (invoice_number, patient_id, user_id, total_amount, discount, net_amount, payment_method, loyalty_points_earned)
-                        VALUES (:inv, :pid, :uid, :tot, :disc, :net, :pay, :lp)
-                    """), {"inv": invoice_no, "pid": patient_id, "uid": st.session_state.user['id'], "tot": subtotal, "disc": discount, "net": net, "pay": payment, "lp": loyalty_points})
+                    conn.execute(text("INSERT INTO sales (invoice_number, patient_id, user_id, total_amount, discount, net_amount, payment_method, loyalty_points_earned) VALUES (:inv, :pid, :uid, :tot, :disc, :net, :pay, :lp)"), {"inv": invoice_no, "pid": patient_id, "uid": st.session_state.user['id'], "tot": subtotal, "disc": discount, "net": net, "pay": payment, "lp": loyalty_points})
                     sale_id = conn.execute(text("SELECT lastval()")).scalar()
                     for item in st.session_state.cart:
                         for batch in item['batches']:
-                            conn.execute(text("""
-                                INSERT INTO sale_items (sale_id, medicine_id, batch_id, quantity, unit_price, total)
-                                VALUES (:sid, :mid, :bid, :qty, :price, :tot)
-                            """), {"sid": sale_id, "mid": item['medicine_id'], "bid": batch['batch_id'], "qty": batch['quantity'], "price": item['unit_price'], "tot": batch['quantity'] * item['unit_price']})
+                            conn.execute(text("INSERT INTO sale_items (sale_id, medicine_id, batch_id, quantity, unit_price, total) VALUES (:sid, :mid, :bid, :qty, :price, :tot)"), {"sid": sale_id, "mid": item['medicine_id'], "bid": batch['batch_id'], "qty": batch['quantity'], "price": item['unit_price'], "tot": batch['quantity'] * item['unit_price']})
                             conn.execute(text("UPDATE batches SET quantity = quantity - :q WHERE id = :bid"), {"q": batch['quantity'], "bid": batch['batch_id']})
                         conn.execute(text("UPDATE medicines SET current_stock = current_stock - :q WHERE id = :mid"), {"q": item['quantity'], "mid": item['medicine_id']})
                     if patient_id:
                         conn.execute(text("INSERT INTO loyalty_points (patient_id, points, redeemed) VALUES (:pid, :pts, 0) ON CONFLICT (patient_id) DO UPDATE SET points = loyalty_points.points + excluded.points"), {"pid": patient_id, "pts": loyalty_points})
                     conn.commit()
-                # Generate receipt
-                receipt_data = {
-                    "invoice_number": invoice_no,
-                    "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                    "patient_name": patient_search or "Walk-in Customer",
-                    "items": [{"name":c['name'],"quantity":c['quantity'],"price":c['unit_price'],"total":c['total']} for c in st.session_state.cart],
-                    "total": subtotal,
-                    "discount": discount,
-                    "net_amount": net
-                }
+                receipt_data = {"invoice_number": invoice_no, "date": datetime.now().strftime("%Y-%m-%d %H:%M"), "patient_name": patient_search or "Walk-in Customer", "items": [{"name":c['name'],"quantity":c['quantity'],"price":c['unit_price'],"total":c['total']} for c in st.session_state.cart], "total": subtotal, "discount": discount, "net_amount": net}
                 pdf_bytes = generate_invoice_pdf(receipt_data)
                 st.success(f"Sale complete! Invoice: {invoice_no}")
                 st.download_button("Download Receipt", data=pdf_bytes, file_name=f"{invoice_no}.pdf", mime="application/pdf")
@@ -1029,15 +936,9 @@ def render_sales_returns():
                 if col3.button("Return", key=f"retbtn_{it[0]}"):
                     if return_qty > 0:
                         with engine.connect() as conn2:
-                            # Need batch_id from sale_item? We need to know which batch to restore. We'll assume original batch_id is stored.
-                            # For simplicity, we add a generic batch restore. In production, store batch_id in sale_items.
-                            # Here we'll just increase medicine stock and create a return record.
                             refund = return_qty * it[3]
                             conn2.execute(text("UPDATE medicines SET current_stock = current_stock + :q WHERE id = (SELECT medicine_id FROM sale_items WHERE id = :siid)"), {"q": return_qty, "siid": it[0]})
-                            conn2.execute(text("""
-                                INSERT INTO sales_returns (original_sale_id, sale_item_id, quantity_returned, refund_amount, reason, created_by)
-                                VALUES (:sid, :siid, :q, :ref, 'Customer return', :uid)
-                            """), {"sid": sale[0], "siid": it[0], "q": return_qty, "ref": refund, "uid": st.session_state.user['id']})
+                            conn2.execute(text("INSERT INTO sales_returns (original_sale_id, sale_item_id, quantity_returned, refund_amount, reason, created_by) VALUES (:sid, :siid, :q, :ref, 'Customer return', :uid)"), {"sid": sale[0], "siid": it[0], "q": return_qty, "ref": refund, "uid": st.session_state.user['id']})
                             conn2.commit()
                         st.success(f"Returned {return_qty} units, refund ${refund:.2f}")
                         st.rerun()
@@ -1076,7 +977,6 @@ def render_label_printing():
         pdf.cell(200,10, f"Price: ${med[3]:.2f}", ln=1)
         pdf.cell(200,10, f"Dosage: {dosage}", ln=1)
         pdf.cell(200,10, f"Pharmacist: {st.session_state.user['full_name']}", ln=1)
-        # Save QR to temp
         qr_path = tempfile.mktemp(suffix=".png")
         qr.save(qr_path)
         pdf.image(qr_path, x=150, y=80, w=40)
@@ -1103,10 +1003,7 @@ def render_suppliers():
         terms = st.text_input("Payment Terms")
         if st.form_submit_button("Add"):
             with engine.connect() as conn:
-                conn.execute(text("""
-                    INSERT INTO suppliers (name, contact_person, phone, email, address, gst_number, payment_terms)
-                    VALUES (:n, :c, :p, :e, :a, :g, :t)
-                """), {"n":name,"c":contact,"p":phone,"e":email,"a":address,"g":gst,"t":terms})
+                conn.execute(text("INSERT INTO suppliers (name, contact_person, phone, email, address, gst_number, payment_terms) VALUES (:n, :c, :p, :e, :a, :g, :t)"), {"n":name,"c":contact,"p":phone,"e":email,"a":address,"g":gst,"t":terms})
                 conn.commit()
             st.rerun()
 
@@ -1117,11 +1014,7 @@ def render_reports():
     if report == "Daily Sales":
         date = st.date_input("Date", datetime.now().date())
         with engine.connect() as conn:
-            rows = conn.execute(text("""
-                SELECT invoice_number, net_amount, payment_method, created_at, u.full_name
-                FROM sales s JOIN users u ON s.user_id = u.id
-                WHERE s.created_at::date = :d
-            """), {"d": date}).fetchall()
+            rows = conn.execute(text("SELECT invoice_number, net_amount, payment_method, created_at, u.full_name FROM sales s JOIN users u ON s.user_id = u.id WHERE s.created_at::date = :d"), {"d": date}).fetchall()
         df = pd.DataFrame([dict(r._mapping) for r in rows])
         st.dataframe(df)
         if not df.empty:
@@ -1134,12 +1027,7 @@ def render_reports():
         month = st.selectbox("Month", range(1,13), format_func=lambda x: datetime(2000,x,1).strftime("%B"))
         year = st.number_input("Year", min_value=2020, value=datetime.now().year)
         with engine.connect() as conn:
-            rows = conn.execute(text("""
-                SELECT DATE(created_at) as date, SUM(net_amount) as daily
-                FROM sales
-                WHERE EXTRACT(YEAR FROM created_at)=:y AND EXTRACT(MONTH FROM created_at)=:m
-                GROUP BY DATE(created_at)
-            """), {"y": year, "m": month}).fetchall()
+            rows = conn.execute(text("SELECT DATE(created_at) as date, SUM(net_amount) as daily FROM sales WHERE EXTRACT(YEAR FROM created_at)=:y AND EXTRACT(MONTH FROM created_at)=:m GROUP BY DATE(created_at)"), {"y": year, "m": month}).fetchall()
         if rows:
             df = pd.DataFrame([{"date":r[0],"sales":r[1]} for r in rows])
             fig = px.line(df, x='date', y='sales', title=f"{datetime(year,month,1).strftime('%B %Y')} Sales")
@@ -1178,10 +1066,7 @@ def render_staff_management():
         role = st.selectbox("Role", list(role_opts.keys()), format_func=lambda x: role_opts[x])
         if st.button("Add"):
             with engine.connect() as conn:
-                conn.execute(text("""
-                    INSERT INTO users (username, password_hash, full_name, email, role_id, must_change_password)
-                    VALUES (:u, :p, :f, :e, :r, 1)
-                """), {"u": uname, "p": generate_password_hash(pwd), "f": full, "e": email, "r": role})
+                conn.execute(text("INSERT INTO users (username, password_hash, full_name, email, role_id, must_change_password) VALUES (:u, :p, :f, :e, :r, 1)"), {"u": uname, "p": generate_password_hash(pwd), "f": full, "e": email, "r": role})
                 conn.commit()
             st.rerun()
     with tab2:
@@ -1203,11 +1088,7 @@ def render_staff_management():
             check_out = col3.time_input("Check Out", value=datetime.now().time(), key=f"out_{emp[0]}")
             if st.button(f"Mark", key=f"att_{emp[0]}"):
                 with engine.connect() as conn:
-                    conn.execute(text("""
-                        INSERT INTO staff_attendance (user_id, date, check_in, check_out, status)
-                        VALUES (:uid, :d, :ci, :co, 'present')
-                        ON CONFLICT (user_id, date) DO UPDATE SET check_in = excluded.check_in, check_out = excluded.check_out
-                    """), {"uid": emp[0], "d": today, "ci": check_in.strftime("%H:%M"), "co": check_out.strftime("%H:%M")})
+                    conn.execute(text("INSERT INTO staff_attendance (user_id, date, check_in, check_out, status) VALUES (:uid, :d, :ci, :co, 'present') ON CONFLICT (user_id, date) DO UPDATE SET check_in = excluded.check_in, check_out = excluded.check_out"), {"uid": emp[0], "d": today, "ci": check_in.strftime("%H:%M"), "co": check_out.strftime("%H:%M")})
                     conn.commit()
                 st.success(f"Marked for {emp[1]}")
 
@@ -1233,11 +1114,7 @@ def render_audit_logs():
     require_permission("audit")
     st.title("📜 Audit Logs")
     with engine.connect() as conn:
-        logs = conn.execute(text("""
-            SELECT al.*, u.full_name
-            FROM audit_logs al LEFT JOIN users u ON al.user_id = u.id
-            ORDER BY al.created_at DESC LIMIT 100
-        """)).fetchall()
+        logs = conn.execute(text("SELECT al.*, u.full_name FROM audit_logs al LEFT JOIN users u ON al.user_id = u.id ORDER BY al.created_at DESC LIMIT 100")).fetchall()
     df = pd.DataFrame([dict(r._mapping) for r in logs])
     st.dataframe(df[['created_at','full_name','action','details']])
 
@@ -1260,13 +1137,7 @@ def render_advanced_features():
                 st.success("No known interactions")
     with tab2:
         with engine.connect() as conn:
-            forecast = conn.execute(text("""
-                SELECT m.name, COALESCE(SUM(si.quantity),0) as sold_last_30d
-                FROM medicines m
-                LEFT JOIN sale_items si ON si.medicine_id = m.id
-                LEFT JOIN sales s ON si.sale_id = s.id AND s.created_at >= CURRENT_DATE - INTERVAL '30 days'
-                GROUP BY m.id
-            """)).fetchall()
+            forecast = conn.execute(text("SELECT m.name, COALESCE(SUM(si.quantity),0) as sold_last_30d FROM medicines m LEFT JOIN sale_items si ON si.medicine_id = m.id LEFT JOIN sales s ON si.sale_id = s.id AND s.created_at >= CURRENT_DATE - INTERVAL '30 days' GROUP BY m.id")).fetchall()
         if forecast:
             df = pd.DataFrame([{"name":r[0],"sold":r[1],"forecast":int(r[1]*1.1)} for r in forecast])
             st.dataframe(df)
@@ -1274,11 +1145,7 @@ def render_advanced_features():
             st.plotly_chart(fig)
     with tab3:
         with engine.connect() as conn:
-            loyalty = conn.execute(text("""
-                SELECT p.first_name, p.last_name, lp.points
-                FROM loyalty_points lp JOIN patients p ON lp.patient_id = p.id
-                ORDER BY lp.points DESC
-            """)).fetchall()
+            loyalty = conn.execute(text("SELECT p.first_name, p.last_name, lp.points FROM loyalty_points lp JOIN patients p ON lp.patient_id = p.id ORDER BY lp.points DESC")).fetchall()
         if loyalty:
             df = pd.DataFrame([{"name":f"{r[0]} {r[1]}","points":r[2]} for r in loyalty])
             st.dataframe(df)
@@ -1311,11 +1178,22 @@ def render_settings():
         st.rerun()
     st.subheader("Backup & Restore")
     if st.button("Create Backup"):
-        # For PostgreSQL, backup is not a simple file. We'll create a SQL dump.
-        st.info("Backup not implemented for PostgreSQL; use pg_dump manually.")
-    restore_file = st.file_uploader("Restore from SQL dump", type=['sql'])
+        st.info("For PostgreSQL, use pg_dump manually. For SQLite, backup file is created.")
+        if not DATABASE_URL.startswith("postgres"):
+            import shutil
+            backup_path = f"backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db"
+            shutil.copy("pharmacy_local.db", backup_path)
+            with open(backup_path, "rb") as f:
+                st.download_button("Download Backup", data=f, file_name=backup_path)
+    restore_file = st.file_uploader("Restore from SQLite backup", type=['db'])
     if restore_file and st.button("Restore"):
-        st.warning("Restore not implemented automatically; use psql manually.")
+        if DATABASE_URL.startswith("postgres"):
+            st.error("Restore not supported for PostgreSQL via UI; use psql.")
+        else:
+            with open("pharmacy_local.db", "wb") as f:
+                f.write(restore_file.getbuffer())
+            st.success("Database restored. Please restart the app.")
+            st.rerun()
 
 # ==================== MAIN ====================
 def main():
@@ -1388,3 +1266,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
