@@ -1,15 +1,9 @@
 #!/usr/bin/env python
 """
-╔═══════════════════════════════════════════════════════════════════════════════╗
-║                    PHARMACY MANAGEMENT SYSTEM                                 ║
-║                    Created by Isaac Madungwe                                  ║
-║                    Copyright © 2026-2030                                      ║
-║                    All Rights Reserved                                        ║
-║                                                                               ║
-║    A complete, enterprise‑grade solution for pharmacies.                     ║
-║    Features: Inventory, Sales, Patients, Prescriptions, AI Assistant,        ║
-║    Loyalty, Appointments, Drug Interactions, Forecasting, Reports, Audit.    ║
-╚═══════════════════════════════════════════════════════════════════════════════╝
+Pharmacy Management System - Production Complete
+Copyright © Isaac Madungwe 2026-2030
+All features: AI Assistant, Inventory, Sales, Prescriptions, Patients, Suppliers,
+Staff, Reports, Audit, Loyalty, Appointments, Drug Interactions, Forecasting.
 """
 
 import os
@@ -20,7 +14,6 @@ import tempfile
 import shutil
 import sqlite3
 import logging
-import hashlib
 from datetime import datetime, timedelta, date
 from typing import Dict, Optional, List, Tuple
 from difflib import get_close_matches
@@ -41,7 +34,7 @@ try:
     from werkzeug.security import generate_password_hash, check_password_hash
 except ImportError as e:
     print(f"Missing required library: {e}")
-    print("Please run: pip install streamlit pandas bcrypt plotly fpdf qrcode python-barcode Pillow werkzeug")
+    print("Please run: pip install streamlit pandas bcrypt plotly fpdf qrcode python-barcode Pillow werkzeug numpy")
     sys.exit(1)
 
 # ==================== CONFIGURATION ====================
@@ -50,7 +43,6 @@ SESSION_TIMEOUT_SECONDS = 1800
 LOGIN_ATTEMPT_LIMIT = 5
 LOGIN_LOCKOUT_SECONDS = 300
 
-# Admin password (change via environment variable for production)
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "Admin@123456")
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -108,8 +100,7 @@ def init_db():
         for key,val in default_settings.items():
             cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?,?)", (key, val))
         conn.commit()
-        # Insert demo drug interaction
-        cur.execute("INSERT OR IGNORE INTO drug_interactions (medicine1_id, medicine2_id, severity, description) SELECT 1,2,'Moderate','May increase bleeding risk' WHERE NOT EXISTS(SELECT 1 FROM drug_interactions)")
+        # No default drug interaction inserted (to avoid foreign key errors). User can add via UI.
 
 init_db()
 
@@ -206,7 +197,6 @@ def create_notification(title, message, type_="info"):
         conn.commit()
 
 def stock_forecast(medicine_id, days=30):
-    # Simple linear regression based on last 30 days sales
     with get_db_connection() as conn:
         rows = conn.execute("""
             SELECT DATE(created_at) as d, SUM(si.quantity) as qty
@@ -214,16 +204,14 @@ def stock_forecast(medicine_id, days=30):
             WHERE si.medicine_id=? AND s.created_at >= date('now','-30 days')
             GROUP BY DATE(s.created_at)
         """, (medicine_id,)).fetchall()
-    if len(rows)<2:
-        return None
+    if len(rows)<2: return None
     x = list(range(len(rows)))
     y = [r[1] for r in rows]
     try:
         z = np.polyfit(x, y, 1)
         forecast = z[0] * days + z[1]
         return max(0, int(forecast))
-    except:
-        return None
+    except: return None
 
 # ==================== AUTHENTICATION ====================
 def login_user(username, password):
@@ -353,14 +341,12 @@ def render_dashboard():
     exp = get_expiring(30)
     if not low.empty: st.warning(f"⚠️ Low stock: {len(low)} medicines")
     if not exp.empty: st.error(f"⚠️ Expiring soon: {len(exp)} batches")
-    # Sales trend
     with get_db_connection() as conn:
         trend = conn.execute("SELECT DATE(created_at) as d, SUM(net_amount) as s FROM sales WHERE created_at >= DATE('now','-7 days') GROUP BY DATE(created_at) ORDER BY d").fetchall()
     if trend:
         df = pd.DataFrame([{"date":r[0],"sales":r[1]} for r in trend])
         fig = px.line(df, x='date', y='sales', title='Last 7 Days Sales')
         st.plotly_chart(fig, use_container_width=True)
-    # Top medicines
     with get_db_connection() as conn:
         top = conn.execute("SELECT m.name, SUM(si.quantity) as sold FROM sale_items si JOIN medicines m ON si.medicine_id=m.id GROUP BY si.medicine_id ORDER BY sold DESC LIMIT 5").fetchall()
     if top:
@@ -826,22 +812,35 @@ def render_advanced_features():
         with get_db_connection() as conn:
             meds = conn.execute("SELECT id,name FROM medicines").fetchall()
         opts = {m[0]:m[1] for m in meds}
-        m1 = st.selectbox("Medicine 1", list(opts.keys()), format_func=lambda x:opts[x])
-        m2 = st.selectbox("Medicine 2", list(opts.keys()), format_func=lambda x:opts[x])
-        if st.button("Check Interaction"):
-            with get_db_connection() as conn:
-                inter = conn.execute("SELECT severity, description FROM drug_interactions WHERE (medicine1_id=? AND medicine2_id=?) OR (medicine1_id=? AND medicine2_id=?)", (m1,m2,m2,m1)).fetchone()
-            if inter: st.warning(f"Interaction: {inter[0]} - {inter[1]}")
-            else: st.success("No known interaction")
+        if opts:
+            m1 = st.selectbox("Medicine 1", list(opts.keys()), format_func=lambda x:opts[x])
+            m2 = st.selectbox("Medicine 2", list(opts.keys()), format_func=lambda x:opts[x])
+            if st.button("Check Interaction"):
+                with get_db_connection() as conn:
+                    inter = conn.execute("SELECT severity, description FROM drug_interactions WHERE (medicine1_id=? AND medicine2_id=?) OR (medicine1_id=? AND medicine2_id=?)", (m1,m2,m2,m1)).fetchone()
+                if inter: st.warning(f"Interaction: {inter[0]} - {inter[1]}")
+                else: st.success("No known interaction")
+            st.subheader("Add New Interaction")
+            sev = st.selectbox("Severity", ["Mild","Moderate","Severe"])
+            desc = st.text_area("Description")
+            if st.button("Add Interaction"):
+                with get_db_connection() as conn:
+                    conn.execute("INSERT INTO drug_interactions (medicine1_id,medicine2_id,severity,description) VALUES (?,?,?,?)", (m1,m2,sev,desc))
+                    conn.commit()
+                st.success("Interaction added")
+        else:
+            st.info("Add medicines first to define interactions.")
     with tab2:
         with get_db_connection() as conn:
             meds = conn.execute("SELECT id,name FROM medicines").fetchall()
-        med_for = st.selectbox("Select Medicine", [m[1] for m in meds])
-        if med_for:
-            med_id = next(m[0] for m in meds if m[1]==med_for)
-            forecast = stock_forecast(med_id, 30)
-            if forecast: st.info(f"Forecast for next 30 days: {forecast} units")
-            else: st.warning("Insufficient data for forecast")
+        if meds:
+            med_for = st.selectbox("Select Medicine", [m[1] for m in meds])
+            if med_for:
+                med_id = next(m[0] for m in meds if m[1]==med_for)
+                forecast = stock_forecast(med_id, 30)
+                if forecast: st.info(f"Forecast for next 30 days: {forecast} units")
+                else: st.warning("Insufficient data for forecast")
+        else: st.info("No medicines")
     with tab3:
         with get_db_connection() as conn:
             loyal = conn.execute("SELECT p.first_name, p.last_name, lp.points FROM loyalty_points lp JOIN patients p ON lp.patient_id=p.id ORDER BY lp.points DESC").fetchall()
@@ -864,6 +863,7 @@ def render_advanced_features():
                     conn.execute("INSERT INTO appointments (patient_id,appointment_date,appointment_time,purpose) VALUES (?,?,?,?)", (pid, app_date, app_time.strftime("%H:%M"), purpose))
                     conn.commit()
                 st.success("Appointment booked"); st.rerun()
+        else: st.info("No patients registered")
 
 def render_ai_assistant():
     require_permission("all")
