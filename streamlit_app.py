@@ -2,6 +2,7 @@
 """
 PHARMACY MANAGEMENT SYSTEM - FINAL PRODUCTION VERSION
 Copyright © Isaac Madungwe 2026-2030
+All errors fixed: loyalty_points ON CONFLICT, session logout, plot columns, success messages.
 """
 
 import os
@@ -85,7 +86,7 @@ def init_db():
         cur.execute("CREATE TABLE IF NOT EXISTS notifications (id INTEGER PRIMARY KEY, title TEXT, message TEXT, type TEXT, is_read INTEGER DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
         cur.execute("CREATE TABLE IF NOT EXISTS audit_logs (id INTEGER PRIMARY KEY, user_id INTEGER, action TEXT, details TEXT, ip_address TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(user_id) REFERENCES users(id))")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_user ON audit_logs(user_id)")
-        cur.execute("CREATE TABLE IF NOT EXISTS loyalty_points (id INTEGER PRIMARY KEY, patient_id INTEGER, points INTEGER DEFAULT 0, redeemed INTEGER DEFAULT 0, FOREIGN KEY(patient_id) REFERENCES patients(id))")
+        cur.execute("CREATE TABLE IF NOT EXISTS loyalty_points (id INTEGER PRIMARY KEY, patient_id INTEGER UNIQUE, points INTEGER DEFAULT 0, redeemed INTEGER DEFAULT 0, FOREIGN KEY(patient_id) REFERENCES patients(id))")
         cur.execute("CREATE TABLE IF NOT EXISTS appointments (id INTEGER PRIMARY KEY, patient_id INTEGER, appointment_date DATE, appointment_time TIME, purpose TEXT, status TEXT DEFAULT 'scheduled', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(patient_id) REFERENCES patients(id))")
         cur.execute("CREATE TABLE IF NOT EXISTS drug_interactions (id INTEGER PRIMARY KEY, medicine1_id INTEGER, medicine2_id INTEGER, severity TEXT, description TEXT, FOREIGN KEY(medicine1_id) REFERENCES medicines(id), FOREIGN KEY(medicine2_id) REFERENCES medicines(id))")
         cur.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
@@ -124,6 +125,20 @@ def init_db():
         for key, val in default_settings.items():
             cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?,?)", (key, val))
         conn.commit()
+
+    # Ensure loyalty_points has UNIQUE constraint on patient_id (if old table exists, recreate)
+    with get_db_connection() as conn:
+        # Check if constraint exists
+        cursor = conn.execute("PRAGMA index_list('loyalty_points')")
+        indexes = [row['name'] for row in cursor.fetchall()]
+        if not any('sqlite_autoindex_loyalty_points' in idx or 'patient_id' in idx for idx in indexes):
+            # Need to recreate table with UNIQUE constraint
+            conn.execute("BEGIN TRANSACTION")
+            conn.execute("CREATE TABLE loyalty_points_new (id INTEGER PRIMARY KEY, patient_id INTEGER UNIQUE, points INTEGER DEFAULT 0, redeemed INTEGER DEFAULT 0, FOREIGN KEY(patient_id) REFERENCES patients(id))")
+            conn.execute("INSERT INTO loyalty_points_new (id, patient_id, points, redeemed) SELECT id, patient_id, points, redeemed FROM loyalty_points")
+            conn.execute("DROP TABLE loyalty_points")
+            conn.execute("ALTER TABLE loyalty_points_new RENAME TO loyalty_points")
+            conn.commit()
 
     clear_all_lockouts()
 
@@ -535,7 +550,7 @@ def render_medicines():
         new_cat = st.text_input("New Category Name")
         if st.button("Add Category") and new_cat:
             with get_db_connection() as conn:
-                conn.execute("INSERT INTO categories (name) VALUES (?) ON CONFLICT DO NOTHING", (new_cat,))
+                conn.execute("INSERT OR IGNORE INTO categories (name) VALUES (?)", (new_cat,))
                 conn.commit()
             st.success(f"Category '{new_cat}' added")
             st.rerun()
@@ -847,10 +862,14 @@ def render_sales_billing():
                             conn.execute("UPDATE batches SET quantity = quantity - ? WHERE id = ?", (b['quantity'], b['batch_id']))
                         conn.execute("UPDATE medicines SET current_stock = current_stock - ? WHERE id = ?", (item['quantity'], item['medicine_id']))
                     if patient_id:
-                        conn.execute("""
-                            INSERT INTO loyalty_points (patient_id, points, redeemed)
-                            VALUES (?,?,0) ON CONFLICT(patient_id) DO UPDATE SET points = points + excluded.points
-                        """, (patient_id, loyalty_points))
+                        # Use INSERT OR REPLACE / UPDATE instead of ON CONFLICT
+                        cur = conn.cursor()
+                        cur.execute("SELECT points FROM loyalty_points WHERE patient_id = ?", (patient_id,))
+                        exists = cur.fetchone()
+                        if exists:
+                            cur.execute("UPDATE loyalty_points SET points = points + ? WHERE patient_id = ?", (loyalty_points, patient_id))
+                        else:
+                            cur.execute("INSERT INTO loyalty_points (patient_id, points, redeemed) VALUES (?, ?, 0)", (patient_id, loyalty_points))
                     conn.commit()
                 receipt_data = {
                     "invoice_number": invoice_no,
@@ -1450,4 +1469,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
