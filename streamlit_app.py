@@ -30,7 +30,7 @@ try:
     from werkzeug.security import generate_password_hash, check_password_hash
 except ImportError as e:
     st.error(f"Missing library: {e}")
-    st.info("Run: pip install streamlit pandas bcrypt plotly fpdf qrcode python-barcode Pillow werkzeug numpy")
+    st.info("Run: pip install streamlit pandas bcrypt plotly fpdf qrcode python-barcode Pillow werkzeug numpy openpyxl")
     st.stop()
 
 # ==================== CONFIGURATION ====================
@@ -335,7 +335,8 @@ def change_password(user_id, new_password):
 def logout_user():
     if st.session_state.get('user'):
         log_audit(st.session_state.user['id'], "LOGOUT", "")
-    st.session_state.clear()
+    for key in list(st.session_state.keys()):
+        del st.session_state[key]
     st.session_state.logged_in = False
     st.rerun()
 
@@ -348,12 +349,19 @@ def check_session_timeout():
     else:
         st.session_state.login_time = datetime.now()
 
-# ==================== AI ASSISTANT ====================
+# ==================== ENHANCED AI ASSISTANT ====================
 MED_KNOWLEDGE = {
     "fever": {"meds": ["Paracetamol", "Ibuprofen"], "dosage": "500mg every 6h", "warning": "Max 4g/day"},
     "cold": {"meds": ["Cetirizine", "Pseudoephedrine"], "dosage": "10mg daily", "warning": "May cause drowsiness"},
     "cough": {"meds": ["Dextromethorphan", "Guaifenesin"], "dosage": "10-20mg every 4h", "warning": "Drink water"},
     "headache": {"meds": ["Aspirin", "Ibuprofen"], "dosage": "400mg every 6h", "warning": "Take with food"},
+    "diarrhea": {"meds": ["Loperamide", "ORS"], "dosage": "2mg after each loose stool", "warning": "Stay hydrated"},
+    "nausea": {"meds": ["Ondansetron", "Domperidone"], "dosage": "4-8mg every 8h", "warning": "May cause drowsiness"},
+    "infection": {"meds": ["Amoxicillin", "Ciprofloxacin"], "dosage": "500mg twice daily", "warning": "Complete full course"},
+    "allergy": {"meds": ["Loratadine", "Fexofenadine"], "dosage": "10mg daily", "warning": "Avoid alcohol"},
+    "diabetes": {"meds": ["Metformin", "Insulin"], "dosage": "500mg twice daily", "warning": "Monitor blood sugar"},
+    "hypertension": {"meds": ["Lisinopril", "Amlodipine"], "dosage": "10mg once daily", "warning": "Check BP regularly"},
+    "asthma": {"meds": ["Salbutamol", "Budesonide"], "dosage": "2 puffs as needed", "warning": "Rinse mouth after use"},
 }
 
 def ai_response(q):
@@ -383,7 +391,7 @@ def ai_response(q):
                     f"- Dosage: {info['dosage']}\n- Warning: {info['warning']}\n\n*Consult a doctor before use.*")
     if "help" in q:
         return ("🤖 **AI Assistant Help**\n"
-                "- Ask about symptoms: 'fever', 'cold', 'headache'\n"
+                "- Ask about symptoms: 'fever', 'cold', 'headache', 'diarrhea', 'nausea', 'infection'\n"
                 "- Check stock: 'stock available', 'low stock alerts'\n"
                 "- Expiry alerts: 'expiring medicines'\n"
                 "- Drug interactions: 'interaction between X and Y'\n"
@@ -470,10 +478,12 @@ def render_medicines():
             col1.write(f"**{r['name']}** (Stock: {r['current_stock']})")
             if col2.button("✏️", key=f"edit_{r['id']}"):
                 st.session_state.edit_medicine = dict(r)
+                st.success("Medicine loaded for editing")
             if col3.button("🗑️", key=f"del_{r['id']}"):
                 with get_db_connection() as conn2:
                     conn2.execute("DELETE FROM medicines WHERE id=?", (r['id'],))
                     conn2.commit()
+                st.success(f"Medicine '{r['name']}' deleted")
                 st.rerun()
             if col4.button("🏷️", key=f"barcode_{r['id']}"):
                 img = generate_barcode(r['barcode'] or str(r['id']))
@@ -509,14 +519,15 @@ def render_medicines():
                         WHERE id=?
                     """, (name, generic, category, bcode, manuf, price, reorder, stock, desc, med['id']))
                     del st.session_state.edit_medicine
+                    st.success("Medicine updated successfully")
                 else:
                     conn.execute("""
                         INSERT INTO medicines (name, generic_name, category_id, barcode, manufacturer,
                                               unit_price, reorder_level, current_stock, description)
                         VALUES (?,?,?,?,?,?,?,?,?)
                     """, (name, generic, category, bcode, manuf, price, reorder, stock, desc))
+                    st.success("Medicine added successfully")
                 conn.commit()
-            st.success("Saved")
             st.rerun()
 
     with tab3:
@@ -526,6 +537,7 @@ def render_medicines():
             with get_db_connection() as conn:
                 conn.execute("INSERT INTO categories (name) VALUES (?) ON CONFLICT DO NOTHING", (new_cat,))
                 conn.commit()
+            st.success(f"Category '{new_cat}' added")
             st.rerun()
         with get_db_connection() as conn:
             cats = conn.execute("SELECT id, name FROM categories").fetchall()
@@ -535,6 +547,7 @@ def render_medicines():
                 if col2.button("Delete", key=f"delcat_{c[0]}"):
                     conn.execute("DELETE FROM categories WHERE id=?", (c[0],))
                     conn.commit()
+                    st.success(f"Category deleted")
                     st.rerun()
 
 def render_inventory():
@@ -544,6 +557,9 @@ def render_inventory():
     with tab1:
         with get_db_connection() as conn:
             meds = conn.execute("SELECT id, name FROM medicines").fetchall()
+        if not meds:
+            st.warning("No medicines found. Add medicines first.")
+            return
         med_opts = {m[0]: m[1] for m in meds}
         med_id = st.selectbox("Select Medicine", list(med_opts.keys()), format_func=lambda x: med_opts[x])
         trans_type = st.selectbox("Transaction Type", ["Stock In", "Stock Out"])
@@ -562,7 +578,7 @@ def render_inventory():
                     """, (med_id, batch_no, qty, expiry, purchase_price, selling_price))
                     conn.execute("UPDATE medicines SET current_stock = current_stock + ? WHERE id = ?", (qty, med_id))
                     conn.commit()
-                st.success("Stock added")
+                st.success(f"Added {qty} units to stock (Batch: {batch_no})")
                 st.rerun()
         else:
             if st.button("Deduct Stock"):
@@ -573,7 +589,7 @@ def render_inventory():
                             conn.execute("UPDATE batches SET quantity = quantity - ? WHERE id = ?", (b['quantity'], b['batch_id']))
                         conn.execute("UPDATE medicines SET current_stock = current_stock - ? WHERE id = ?", (qty, med_id))
                         conn.commit()
-                    st.success(f"Stock deducted using {len(batches)} batch(es)")
+                    st.success(f"Deducted {qty} units using {len(batches)} batch(es)")
                     st.rerun()
                 except ValueError as e:
                     st.error(str(e))
@@ -641,6 +657,8 @@ def render_patients():
                     conn.commit()
                 st.success(f"Patient registered with ID: {pid}")
                 st.rerun()
+            else:
+                st.error("First and last name are required")
 
 def render_prescriptions():
     require_permission("prescriptions")
@@ -654,6 +672,8 @@ def render_prescriptions():
                 JOIN patients pat ON p.patient_id = pat.id
                 WHERE p.status = 'pending'
             """).fetchall()
+        if not pending:
+            st.info("No pending prescriptions")
         for p in pending:
             with st.expander(f"#{p['prescription_number']} - {p['first_name']} {p['last_name']}"):
                 st.write(f"Doctor: {p['doctor_name']}")
@@ -689,11 +709,15 @@ def render_prescriptions():
                     with get_db_connection() as conn2:
                         conn2.execute("UPDATE prescriptions SET status = 'rejected' WHERE id = ?", (p['id'],))
                         conn2.commit()
+                    st.success("Prescription rejected")
                     st.rerun()
     with tab2:
         st.subheader("Create Electronic Prescription")
         with get_db_connection() as conn:
             patients = conn.execute("SELECT id, patient_id, first_name, last_name FROM patients").fetchall()
+        if not patients:
+            st.warning("No patients registered. Please add patients first.")
+            return
         pat_opts = {p[0]: f"{p[2]} {p[3]} ({p[1]})" for p in patients}
         patient_id = st.selectbox("Patient", list(pat_opts.keys()), format_func=lambda x: pat_opts[x])
         doctor_name = st.text_input("Doctor Name")
@@ -701,6 +725,9 @@ def render_prescriptions():
         expiry_date = st.date_input("Expiry Date", datetime.now().date() + timedelta(days=30))
         with get_db_connection() as conn:
             all_meds = conn.execute("SELECT id, name FROM medicines").fetchall()
+        if not all_meds:
+            st.warning("No medicines available. Add medicines first.")
+            return
         med_opts = {m[0]: m[1] for m in all_meds}
         if 'pres_items' not in st.session_state:
             st.session_state.pres_items = []
@@ -721,29 +748,34 @@ def render_prescriptions():
                 "dosage": dosage,
                 "duration": duration
             })
+            st.success(f"Added {med_opts[med_sel]} to prescription")
             st.rerun()
         for idx, it in enumerate(st.session_state.pres_items):
             st.write(f"{idx+1}. {it['name']} - Qty {it['quantity']}, Dosage {it['dosage']}")
             if st.button(f"Remove {idx}", key=f"rem_{idx}"):
                 st.session_state.pres_items.pop(idx)
+                st.success("Item removed")
                 st.rerun()
         if st.button("Save Prescription") and patient_id:
-            pres_num = f"RX{datetime.now().strftime('%Y%m%d%H%M%S')}"
-            with get_db_connection() as conn:
-                conn.execute("""
-                    INSERT INTO prescriptions (prescription_number, patient_id, doctor_name, prescribed_date, expiry_date, status)
-                    VALUES (?,?,?,?,?,'pending')
-                """, (pres_num, patient_id, doctor_name, prescribed_date, expiry_date))
-                pres_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-                for it in st.session_state.pres_items:
+            if not st.session_state.pres_items:
+                st.error("Add at least one medicine")
+            else:
+                pres_num = f"RX{datetime.now().strftime('%Y%m%d%H%M%S')}"
+                with get_db_connection() as conn:
                     conn.execute("""
-                        INSERT INTO prescription_items (prescription_id, medicine_id, dosage, duration, instructions, quantity)
-                        VALUES (?,?,?,?,?,?)
-                    """, (pres_id, it['medicine_id'], it['dosage'], it['duration'], it['dosage'], it['quantity']))
-                conn.commit()
-            st.session_state.pres_items = []
-            st.success(f"Prescription {pres_num} created")
-            st.rerun()
+                        INSERT INTO prescriptions (prescription_number, patient_id, doctor_name, prescribed_date, expiry_date, status)
+                        VALUES (?,?,?,?,?,'pending')
+                    """, (pres_num, patient_id, doctor_name, prescribed_date, expiry_date))
+                    pres_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+                    for it in st.session_state.pres_items:
+                        conn.execute("""
+                            INSERT INTO prescription_items (prescription_id, medicine_id, dosage, duration, instructions, quantity)
+                            VALUES (?,?,?,?,?,?)
+                        """, (pres_id, it['medicine_id'], it['dosage'], it['duration'], it['dosage'], it['quantity']))
+                    conn.commit()
+                st.session_state.pres_items = []
+                st.success(f"Prescription {pres_num} created")
+                st.rerun()
 
 def render_sales_billing():
     require_permission("sales")
@@ -772,6 +804,7 @@ def render_sales_billing():
                         "total": med[2] * qty,
                         "batches": batches
                     })
+                    st.success(f"Added {qty} x {med[1]} to cart")
                     st.rerun()
                 except ValueError as e:
                     st.error(str(e))
@@ -853,6 +886,9 @@ def render_sales_returns():
                 JOIN medicines m ON si.medicine_id = m.id
                 WHERE si.sale_id = ?
             """, (sale[0],)).fetchall()
+        if not items:
+            st.info("No items found for this invoice")
+            return
         for it in items:
             col1, col2, col3 = st.columns([3,1,1])
             col1.write(f"{it[1]} - Sold: {it[2]}")
@@ -869,6 +905,8 @@ def render_sales_returns():
                         conn2.commit()
                     st.success(f"Returned {ret_qty} units, refund ${refund:.2f}")
                     st.rerun()
+                else:
+                    st.warning("Enter quantity > 0")
 
 def render_label_printing():
     require_permission("label_print")
@@ -914,6 +952,7 @@ def render_label_printing():
         os.unlink(qr_path)
         pdf_bytes = pdf.output(dest='S').encode('latin1')
         st.download_button("Download Label (PDF)", data=pdf_bytes, file_name=f"label_{med[1]}.pdf", mime="application/pdf")
+        st.success("Label generated")
 
 def render_suppliers():
     require_permission("suppliers")
@@ -944,6 +983,7 @@ def render_suppliers():
                         VALUES (?,?,?,?,?,?,?)
                     """, (name, contact, phone, email, address, gst, terms))
                     conn.commit()
+                st.success(f"Supplier '{name}' added")
                 st.rerun()
             else:
                 st.error("Supplier name is required")
@@ -987,10 +1027,13 @@ def render_reports():
     elif report_type == "Inventory Report":
         with get_db_connection() as conn:
             rows = conn.execute("SELECT name, current_stock, reorder_level, unit_price FROM medicines").fetchall()
-        df = pd.DataFrame([dict(r) for r in rows])
-        st.dataframe(df)
-        fig = px.bar(df, x='name', y='current_stock', title='Current Stock Levels')
-        st.plotly_chart(fig)
+        if rows:
+            df = pd.DataFrame([dict(r) for r in rows])
+            st.dataframe(df)
+            fig = px.bar(df, x='name', y='current_stock', title='Current Stock Levels')
+            st.plotly_chart(fig)
+        else:
+            st.info("No medicine data")
     elif report_type == "Expiry Report":
         expiring = get_expiring(90)
         st.dataframe(expiring)
@@ -1038,7 +1081,7 @@ def render_staff_management():
                             VALUES (?,?,?,?,?,1)
                         """, (uname, generate_password_hash(pwd), full, email, role))
                         conn.commit()
-                    st.success(f"Employee {full} added")
+                    st.success(f"Employee {full} added with role {role_opts[role]}")
                     st.rerun()
                 else:
                     st.error("Please fill all required fields")
@@ -1074,6 +1117,8 @@ def render_notifications():
     st.title("🔔 Notifications")
     with get_db_connection() as conn:
         notifs = conn.execute("SELECT * FROM notifications ORDER BY created_at DESC").fetchall()
+    if not notifs:
+        st.info("No notifications")
     for n in notifs:
         if n['type'] == 'warning':
             st.warning(f"**{n['title']}**: {n['message']}")
@@ -1085,6 +1130,7 @@ def render_notifications():
         with get_db_connection() as conn:
             conn.execute("DELETE FROM notifications")
             conn.commit()
+        st.success("All notifications cleared")
         st.rerun()
 
 def render_audit_logs():
@@ -1098,8 +1144,11 @@ def render_audit_logs():
             ORDER BY al.created_at DESC
             LIMIT 100
         """).fetchall()
-    df = pd.DataFrame([dict(r) for r in logs])
-    st.dataframe(df[['created_at', 'full_name', 'action', 'details']])
+    if logs:
+        df = pd.DataFrame([dict(r) for r in logs])
+        st.dataframe(df[['created_at', 'full_name', 'action', 'details']])
+    else:
+        st.info("No audit logs yet")
 
 def render_advanced_features():
     require_permission("advanced")
@@ -1126,13 +1175,16 @@ def render_advanced_features():
             sev = st.selectbox("Severity", ["Mild", "Moderate", "Severe"])
             desc = st.text_area("Description")
             if st.button("Add Interaction"):
-                with get_db_connection() as conn:
-                    conn.execute("""
-                        INSERT INTO drug_interactions (medicine1_id, medicine2_id, severity, description)
-                        VALUES (?,?,?,?)
-                    """, (med1, med2, sev, desc))
-                    conn.commit()
-                st.success("Interaction added")
+                if med1 != med2:
+                    with get_db_connection() as conn:
+                        conn.execute("""
+                            INSERT INTO drug_interactions (medicine1_id, medicine2_id, severity, description)
+                            VALUES (?,?,?,?)
+                        """, (med1, med2, sev, desc))
+                        conn.commit()
+                    st.success("Interaction added")
+                else:
+                    st.error("Select two different medicines")
         else:
             st.info("Add medicines first to define interactions.")
     with tab2:
@@ -1240,6 +1292,7 @@ def render_settings():
         shutil.copy(DB_PATH, backup_name)
         with open(backup_name, "rb") as f:
             st.download_button("Download Backup", data=f, file_name=backup_name, mime="application/octet-stream")
+        st.success("Backup created")
     restore_file = st.file_uploader("Restore from Backup (SQLite .db file)", type=['db'])
     if restore_file and st.button("Restore Backup"):
         temp_path = tempfile.NamedTemporaryFile(delete=False, suffix=".db").name
@@ -1397,3 +1450,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
