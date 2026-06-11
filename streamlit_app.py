@@ -1,7 +1,7 @@
 
-    #!/usr/bin/env python3
+#!/usr/bin/env python
 """
-PHARMACY MANAGEMENT SYSTEM - FINAL COMPLETE PRODUCTION VERSION
+PHARMACY MANAGEMENT SYSTEM 
 Copyright © Isaac Madungwe 2026-2030
 All modules: Dashboard, Medicines, Inventory, Patients, Prescriptions,
 Sales & Billing, Sales Returns, Label Printing, Suppliers, Reports,
@@ -1613,3 +1613,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
