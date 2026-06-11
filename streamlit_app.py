@@ -1,8 +1,10 @@
 #!/usr/bin/env python
 """
-PHARMACY MANAGEMENT SYSTEM - FINAL PRODUCTION VERSION
+PHARMACY MANAGEMENT SYSTEM 
 Copyright © Isaac Madungwe 2026-2030
-All errors fixed: loyalty_points ON CONFLICT, session logout, plot columns, success messages.
+All features: Inventory (batches, FEFO), Sales, Returns, Prescriptions, Patients,
+Suppliers, Staff, Reports, Audit, Loyalty, Appointments, Drug Interactions,
+Stock Forecasting, AI Assistant, Label Printing, and Settings.
 """
 
 import os
@@ -30,13 +32,13 @@ try:
     from PIL import Image
     from werkzeug.security import generate_password_hash, check_password_hash
 except ImportError as e:
-    st.error(f"Missing library: {e}")
+    st.error(f"Missing required library: {e}")
     st.info("Run: pip install streamlit pandas bcrypt plotly fpdf qrcode python-barcode Pillow werkzeug numpy openpyxl")
     st.stop()
 
 # ==================== CONFIGURATION ====================
 DB_PATH = "pharmacy_management.db"
-SESSION_TIMEOUT_SECONDS = 1800
+SESSION_TIMEOUT_SECONDS = 3600  # 1 hour
 LOGIN_ATTEMPT_LIMIT = 5
 LOGIN_LOCKOUT_SECONDS = 300
 
@@ -126,13 +128,11 @@ def init_db():
             cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?,?)", (key, val))
         conn.commit()
 
-    # Ensure loyalty_points has UNIQUE constraint on patient_id (if old table exists, recreate)
+    # Fix loyalty_points table if missing UNIQUE constraint
     with get_db_connection() as conn:
-        # Check if constraint exists
         cursor = conn.execute("PRAGMA index_list('loyalty_points')")
         indexes = [row['name'] for row in cursor.fetchall()]
         if not any('sqlite_autoindex_loyalty_points' in idx or 'patient_id' in idx for idx in indexes):
-            # Need to recreate table with UNIQUE constraint
             conn.execute("BEGIN TRANSACTION")
             conn.execute("CREATE TABLE loyalty_points_new (id INTEGER PRIMARY KEY, patient_id INTEGER UNIQUE, points INTEGER DEFAULT 0, redeemed INTEGER DEFAULT 0, FOREIGN KEY(patient_id) REFERENCES patients(id))")
             conn.execute("INSERT INTO loyalty_points_new (id, patient_id, points, redeemed) SELECT id, patient_id, points, redeemed FROM loyalty_points")
@@ -140,9 +140,8 @@ def init_db():
             conn.execute("ALTER TABLE loyalty_points_new RENAME TO loyalty_points")
             conn.commit()
 
-    clear_all_lockouts()
-
 init_db()
+clear_all_lockouts()
 
 # ==================== HELPER FUNCTIONS ====================
 def get_settings_dict():
@@ -350,9 +349,11 @@ def change_password(user_id, new_password):
 def logout_user():
     if st.session_state.get('user'):
         log_audit(st.session_state.user['id'], "LOGOUT", "")
-    for key in list(st.session_state.keys()):
-        del st.session_state[key]
-    st.session_state.logged_in = False
+    # Clear only session keys that matter
+    keys_to_clear = ['logged_in', 'user', 'login_time', 'must_change_password', 'page', 'cart', 'pres_items', 'ai_msgs', 'edit_medicine']
+    for key in keys_to_clear:
+        if key in st.session_state:
+            del st.session_state[key]
     st.rerun()
 
 def check_session_timeout():
@@ -364,7 +365,7 @@ def check_session_timeout():
     else:
         st.session_state.login_time = datetime.now()
 
-# ==================== ENHANCED AI ASSISTANT ====================
+# ==================== AI ASSISTANT ====================
 MED_KNOWLEDGE = {
     "fever": {"meds": ["Paracetamol", "Ibuprofen"], "dosage": "500mg every 6h", "warning": "Max 4g/day"},
     "cold": {"meds": ["Cetirizine", "Pseudoephedrine"], "dosage": "10mg daily", "warning": "May cause drowsiness"},
@@ -562,7 +563,7 @@ def render_medicines():
                 if col2.button("Delete", key=f"delcat_{c[0]}"):
                     conn.execute("DELETE FROM categories WHERE id=?", (c[0],))
                     conn.commit()
-                    st.success(f"Category deleted")
+                    st.success("Category deleted")
                     st.rerun()
 
 def render_inventory():
@@ -862,7 +863,6 @@ def render_sales_billing():
                             conn.execute("UPDATE batches SET quantity = quantity - ? WHERE id = ?", (b['quantity'], b['batch_id']))
                         conn.execute("UPDATE medicines SET current_stock = current_stock - ? WHERE id = ?", (item['quantity'], item['medicine_id']))
                     if patient_id:
-                        # Use INSERT OR REPLACE / UPDATE instead of ON CONFLICT
                         cur = conn.cursor()
                         cur.execute("SELECT points FROM loyalty_points WHERE patient_id = ?", (patient_id,))
                         exists = cur.fetchone()
@@ -1330,9 +1330,30 @@ def render_settings():
 
 # ==================== MAIN ====================
 def main():
-    init_db()
-    clear_all_lockouts()
+    # Set page config first
+    st.set_page_config(
+        page_title="Pharmacy Management System",
+        page_icon="💊",
+        layout="wide",
+        initial_sidebar_state="expanded"
+    )
+    # Add meta description and main landmark for accessibility/SEO
+    st.markdown(
+        """
+        <meta name="description" content="Complete Pharmacy Management System with inventory,
+        sales, prescriptions, AI assistant, and full reporting. Secure, accessible, and production-ready.">
+        <main role="main" style="display:block">
+        """,
+        unsafe_allow_html=True
+    )
 
+    # Initialise database and clear lockouts once
+    if 'db_initialised' not in st.session_state:
+        init_db()
+        clear_all_lockouts()
+        st.session_state.db_initialised = True
+
+    # Emergency unlock/reset via URL parameters
     qp = st.query_params
     if "unlock" in qp and qp["unlock"] == UNLOCK_SECRET:
         clear_all_lockouts()
@@ -1351,12 +1372,11 @@ def main():
                 st.error("Admin user not found.")
 
     if not st.session_state.get('logged_in'):
-        st.set_page_config(page_title="Pharmacy Management System", layout="wide")
         st.title("🏥 Pharmacy Management System")
         col1, col2, col3 = st.columns([1,2,1])
         with col2:
             st.image("https://img.icons8.com/fluency/96/pill.png", width=100)
-            st.subheader("Secure Login")
+            st.markdown("<h2 style='text-align: center;'>Secure Login</h2>", unsafe_allow_html=True)
             username = st.text_input("Username")
             password = st.text_input("Password", type="password")
             if st.button("Login", type="primary", use_container_width=True):
@@ -1373,8 +1393,10 @@ def main():
                     st.warning("Please enter both username and password")
             st.caption("Default admin credentials: admin / Admin@123456 (change after first login)")
             st.caption("If locked out, add ?unlock=unlock123 to the URL")
+        st.markdown("</main>", unsafe_allow_html=True)
         return
 
+    # After login – check session timeout and forced password change
     check_session_timeout()
     if st.session_state.user.get('must_change_password'):
         st.title("🔐 Change Required Password")
@@ -1392,9 +1414,10 @@ def main():
                     logout_user()
                 except ValueError as e:
                     st.error(str(e))
+        st.markdown("</main>", unsafe_allow_html=True)
         return
 
-    st.set_page_config(page_title="Pharmacy Management System", layout="wide", page_icon="💊")
+    # Main app sidebar
     st.sidebar.image("https://img.icons8.com/fluency/96/pill.png", width=80)
     st.sidebar.title(f"Welcome, {st.session_state.user['full_name']}")
     st.sidebar.write(f"Role: {st.session_state.user['role_name']}")
@@ -1467,5 +1490,8 @@ def main():
     else:
         render_dashboard()
 
+    st.markdown("</main>", unsafe_allow_html=True)
+
 if __name__ == "__main__":
     main()
+    
