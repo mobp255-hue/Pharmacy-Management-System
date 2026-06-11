@@ -1,10 +1,12 @@
-#!/usr/bin/env python
+
+    #!/usr/bin/env python3
 """
-PHARMACY MANAGEMENT SYSTEM 
+PHARMACY MANAGEMENT SYSTEM - FINAL COMPLETE PRODUCTION VERSION
 Copyright © Isaac Madungwe 2026-2030
-All features: Inventory (batches, FEFO), Sales, Returns, Prescriptions, Patients,
-Suppliers, Staff, Reports, Audit, Loyalty, Appointments, Drug Interactions,
-Stock Forecasting, AI Assistant, Label Printing, and Settings.
+All modules: Dashboard, Medicines, Inventory, Patients, Prescriptions,
+Sales & Billing, Sales Returns, Label Printing, Suppliers, Reports,
+Staff Management, Notifications, Audit Logs, Advanced Features (incl.
+Usage Analytics & Auto POs), AI Assistant, Settings.
 """
 
 import os
@@ -145,21 +147,29 @@ clear_all_lockouts()
 
 # ==================== HELPER FUNCTIONS ====================
 def get_settings_dict():
-    with get_db_connection() as conn:
-        return {r["key"]: r["value"] for r in conn.execute("SELECT key, value FROM settings").fetchall()}
+    try:
+        with get_db_connection() as conn:
+            return {r["key"]: r["value"] for r in conn.execute("SELECT key, value FROM settings").fetchall()}
+    except Exception as e:
+        logger.error(f"Failed to get settings: {e}")
+        return {}
 
 def update_setting(key, value):
-    with get_db_connection() as conn:
-        conn.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?,?,CURRENT_TIMESTAMP)", (key, value))
-        conn.commit()
+    try:
+        with get_db_connection() as conn:
+            conn.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?,?,CURRENT_TIMESTAMP)", (key, value))
+            conn.commit()
+    except Exception as e:
+        logger.error(f"Failed to update setting {key}: {e}")
+        st.error("Could not save setting. Please try again.")
 
 def log_audit(user_id, action, details=""):
     try:
         with get_db_connection() as conn:
             conn.execute("INSERT INTO audit_logs (user_id, action, details) VALUES (?,?,?)", (user_id, action, details))
             conn.commit()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.error(f"Audit log failed: {e}")
 
 def require_permission(perm):
     if not st.session_state.get('logged_in'):
@@ -172,76 +182,93 @@ def require_permission(perm):
     st.stop()
 
 def get_low_stock():
-    with get_db_connection() as conn:
-        rows = conn.execute("SELECT id,name,current_stock,reorder_level FROM medicines WHERE current_stock <= reorder_level").fetchall()
-        return pd.DataFrame([{"id":r[0],"name":r[1],"stock":r[2],"reorder":r[3]} for r in rows])
+    try:
+        with get_db_connection() as conn:
+            rows = conn.execute("SELECT id,name,current_stock,reorder_level FROM medicines WHERE current_stock <= reorder_level").fetchall()
+            return pd.DataFrame([{"id":r[0],"name":r[1],"stock":r[2],"reorder":r[3]} for r in rows])
+    except Exception as e:
+        logger.error(f"Low stock query error: {e}")
+        return pd.DataFrame()
 
 def get_expiring(days=30):
     exp = (datetime.now() + timedelta(days=days)).date().isoformat()
-    with get_db_connection() as conn:
-        rows = conn.execute("SELECT b.id, m.name, b.batch_number, b.expiry_date, b.quantity FROM batches b JOIN medicines m ON b.medicine_id=m.id WHERE b.expiry_date <= ? AND b.quantity>0 ORDER BY b.expiry_date", (exp,)).fetchall()
-        return pd.DataFrame([{"id":r[0],"name":r[1],"batch":r[2],"expiry":r[3],"qty":r[4]} for r in rows])
+    try:
+        with get_db_connection() as conn:
+            rows = conn.execute("SELECT b.id, m.name, b.batch_number, b.expiry_date, b.quantity FROM batches b JOIN medicines m ON b.medicine_id=m.id WHERE b.expiry_date <= ? AND b.quantity>0 ORDER BY b.expiry_date", (exp,)).fetchall()
+            return pd.DataFrame([{"id":r[0],"name":r[1],"batch":r[2],"expiry":r[3],"qty":r[4]} for r in rows])
+    except Exception as e:
+        logger.error(f"Expiry query error: {e}")
+        return pd.DataFrame()
 
 def get_best_batch(medicine_id, needed):
-    with get_db_connection() as conn:
-        batches = conn.execute("SELECT id, quantity, selling_price FROM batches WHERE medicine_id=? AND quantity>0 AND expiry_date>date('now') ORDER BY expiry_date ASC", (medicine_id,)).fetchall()
-    res = []
-    rem = needed
-    for b in batches:
-        take = min(b[1], rem)
-        if take > 0:
-            res.append({"batch_id": b[0], "quantity": take, "price": b[2]})
-            rem -= take
-        if rem == 0:
-            break
-    if rem > 0:
-        raise ValueError("Insufficient stock")
-    return res
+    try:
+        with get_db_connection() as conn:
+            batches = conn.execute("SELECT id, quantity, selling_price FROM batches WHERE medicine_id=? AND quantity>0 AND expiry_date>date('now') ORDER BY expiry_date ASC", (medicine_id,)).fetchall()
+        res = []
+        rem = needed
+        for b in batches:
+            take = min(b[1], rem)
+            if take > 0:
+                res.append({"batch_id": b[0], "quantity": take, "price": b[2]})
+                rem -= take
+            if rem == 0:
+                break
+        if rem > 0:
+            raise ValueError("Insufficient stock")
+        return res
+    except Exception as e:
+        logger.error(f"Batch selection error: {e}")
+        raise ValueError("Error selecting batches. Check stock or contact support.")
 
 def generate_invoice_pdf(data):
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_font("Arial", "B", 16)
-    s = get_settings_dict()
-    pdf.cell(200, 10, s.get("pharmacy_name", "Pharmacy"), ln=1, align='C')
-    pdf.set_font("Arial", "", 10)
-    pdf.cell(200, 5, s.get("pharmacy_address", ""), ln=1, align='C')
-    pdf.cell(200, 5, f"Phone: {s.get('pharmacy_phone', '')}", ln=1, align='C')
-    pdf.ln(10)
-    pdf.set_font("Arial", "B", 12)
-    pdf.cell(200, 10, f"Invoice: {data['invoice_number']}", ln=1)
-    pdf.cell(200, 10, f"Date: {data['date']}", ln=1)
-    pdf.cell(200, 10, f"Patient: {data.get('patient_name', 'Walk-in')}", ln=1)
-    pdf.ln(5)
-    pdf.set_font("Arial", "B", 10)
-    pdf.cell(80, 10, "Item", 1)
-    pdf.cell(30, 10, "Qty", 1)
-    pdf.cell(40, 10, "Price", 1)
-    pdf.cell(40, 10, "Total", 1)
-    pdf.ln()
-    pdf.set_font("Arial", "", 10)
-    for it in data['items']:
-        pdf.cell(80, 10, it['name'][:30], 1)
-        pdf.cell(30, 10, str(it['quantity']), 1)
-        pdf.cell(40, 10, f"${it['price']:.2f}", 1)
-        pdf.cell(40, 10, f"${it['total']:.2f}", 1)
+    try:
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_font("Arial", "B", 16)
+        s = get_settings_dict()
+        pdf.cell(200, 10, s.get("pharmacy_name", "Pharmacy"), ln=1, align='C')
+        pdf.set_font("Arial", "", 10)
+        pdf.cell(200, 5, s.get("pharmacy_address", ""), ln=1, align='C')
+        pdf.cell(200, 5, f"Phone: {s.get('pharmacy_phone', '')}", ln=1, align='C')
+        pdf.ln(10)
+        pdf.set_font("Arial", "B", 12)
+        pdf.cell(200, 10, f"Invoice: {data['invoice_number']}", ln=1)
+        pdf.cell(200, 10, f"Date: {data['date']}", ln=1)
+        pdf.cell(200, 10, f"Patient: {data.get('patient_name', 'Walk-in')}", ln=1)
+        pdf.ln(5)
+        pdf.set_font("Arial", "B", 10)
+        pdf.cell(80, 10, "Item", 1)
+        pdf.cell(30, 10, "Qty", 1)
+        pdf.cell(40, 10, "Price", 1)
+        pdf.cell(40, 10, "Total", 1)
         pdf.ln()
-    pdf.ln(5)
-    pdf.set_font("Arial", "B", 10)
-    pdf.cell(150, 10, "Total:", 0)
-    pdf.cell(40, 10, f"${data['total']:.2f}", 0)
-    pdf.ln()
-    pdf.cell(150, 10, "Discount:", 0)
-    pdf.cell(40, 10, f"${data.get('discount', 0):.2f}", 0)
-    pdf.ln()
-    pdf.cell(150, 10, "Tax (GST):", 0)
-    pdf.cell(40, 10, f"${data.get('tax', 0):.2f}", 0)
-    pdf.ln()
-    pdf.cell(150, 10, "Net Amount:", 0)
-    pdf.cell(40, 10, f"${data['net_amount']:.2f}", 0)
-    pdf.ln(10)
-    pdf.cell(200, 10, s.get("receipt_footer", "Thank you!"), ln=1, align='C')
-    return pdf.output(dest='S').encode('latin1')
+        pdf.set_font("Arial", "", 10)
+        for it in data['items']:
+            pdf.cell(80, 10, it['name'][:30], 1)
+            pdf.cell(30, 10, str(it['quantity']), 1)
+            pdf.cell(40, 10, f"${it['price']:.2f}", 1)
+            pdf.cell(40, 10, f"${it['total']:.2f}", 1)
+            pdf.ln()
+        pdf.ln(5)
+        pdf.set_font("Arial", "B", 10)
+        pdf.cell(150, 10, "Total:", 0)
+        pdf.cell(40, 10, f"${data['total']:.2f}", 0)
+        pdf.ln()
+        pdf.cell(150, 10, "Discount:", 0)
+        pdf.cell(40, 10, f"${data.get('discount', 0):.2f}", 0)
+        pdf.ln()
+        pdf.cell(150, 10, "Tax (GST):", 0)
+        pdf.cell(40, 10, f"${data.get('tax', 0):.2f}", 0)
+        pdf.ln()
+        pdf.cell(150, 10, "Net Amount:", 0)
+        pdf.cell(40, 10, f"${data['net_amount']:.2f}", 0)
+        pdf.ln(10)
+        pdf.cell(200, 10, s.get("receipt_footer", "Thank you!"), ln=1, align='C')
+        return pdf.output(dest='S').encode('latin1')
+    except Exception as e:
+        logger.error(f"PDF generation error: {e}")
+        st.error("Failed to generate PDF. Please try again.")
+        return b""
 
 def generate_barcode(data):
     try:
@@ -250,7 +277,8 @@ def generate_barcode(data):
         code128(data, writer=ImageWriter()).write(buf)
         buf.seek(0)
         return Image.open(buf)
-    except Exception:
+    except Exception as e:
+        logger.error(f"Barcode error: {e}")
         return Image.new('RGB', (300, 100), 'white')
 
 def generate_qr(data):
@@ -259,97 +287,151 @@ def generate_qr(data):
     return qr.make_image(fill_color="black", back_color="white")
 
 def create_notification(title, message, type_="info"):
-    with get_db_connection() as conn:
-        conn.execute("INSERT INTO notifications (title, message, type) VALUES (?,?,?)", (title, message, type_))
-        conn.commit()
+    try:
+        with get_db_connection() as conn:
+            conn.execute("INSERT INTO notifications (title, message, type) VALUES (?,?,?)", (title, message, type_))
+            conn.commit()
+    except Exception as e:
+        logger.error(f"Notification creation error: {e}")
 
 def stock_forecast(medicine_id, days=30):
-    with get_db_connection() as conn:
-        rows = conn.execute("""
-            SELECT DATE(created_at) as d, SUM(si.quantity) as qty
-            FROM sale_items si JOIN sales s ON si.sale_id=s.id
-            WHERE si.medicine_id=? AND s.created_at >= date('now','-30 days')
-            GROUP BY DATE(s.created_at)
-        """, (medicine_id,)).fetchall()
-    if len(rows) < 2:
-        return None
-    x = list(range(len(rows)))
-    y = [r[1] for r in rows]
     try:
+        with get_db_connection() as conn:
+            rows = conn.execute("""
+                SELECT DATE(created_at) as d, SUM(si.quantity) as qty
+                FROM sale_items si JOIN sales s ON si.sale_id=s.id
+                WHERE si.medicine_id=? AND s.created_at >= date('now','-30 days')
+                GROUP BY DATE(s.created_at)
+            """, (medicine_id,)).fetchall()
+        if len(rows) < 2:
+            return None
+        x = list(range(len(rows)))
+        y = [r[1] for r in rows]
         z = np.polyfit(x, y, 1)
         forecast = z[0] * days + z[1]
         return max(0, int(forecast))
-    except Exception:
+    except Exception as e:
+        logger.error(f"Forecast error: {e}")
         return None
+
+def usage_analytics(medicine_id=None, days=30):
+    try:
+        with get_db_connection() as conn:
+            if medicine_id:
+                rows = conn.execute("""
+                    SELECT DATE(s.created_at) as date, SUM(si.quantity) as qty
+                    FROM sale_items si JOIN sales s ON si.sale_id=s.id
+                    WHERE si.medicine_id=? AND s.created_at >= date('now', ?)
+                    GROUP BY DATE(s.created_at)
+                    ORDER BY date
+                """, (medicine_id, f'-{days} days')).fetchall()
+            else:
+                rows = conn.execute("""
+                    SELECT DATE(s.created_at) as date, SUM(si.quantity) as qty
+                    FROM sale_items si JOIN sales s ON si.sale_id=s.id
+                    WHERE s.created_at >= date('now', ?)
+                    GROUP BY DATE(s.created_at)
+                    ORDER BY date
+                """, (f'-{days} days',)).fetchall()
+        return pd.DataFrame([{"date": r[0], "quantity": r[1]} for r in rows])
+    except Exception as e:
+        logger.error(f"Usage analytics error: {e}")
+        return pd.DataFrame()
+
+def auto_create_purchase_orders():
+    low = get_low_stock()
+    if low.empty:
+        return 0
+    created = 0
+    with get_db_connection() as conn:
+        for _, med in low.iterrows():
+            supplier = conn.execute("SELECT id FROM suppliers WHERE is_active=1 LIMIT 1").fetchone()
+            if supplier:
+                po_num = f"POAUTO{datetime.now().strftime('%Y%m%d%H%M%S')}_{med['id']}"
+                conn.execute("""
+                    INSERT INTO purchase_orders (po_number, supplier_id, order_date, expected_delivery, total_amount, status, created_by)
+                    VALUES (?, ?, date('now'), date('now', '+7 days'), ?, 'pending', ?)
+                """, (po_num, supplier[0], med['reorder'] * 2, 1))
+                created += 1
+        conn.commit()
+    return created
 
 # ==================== AUTHENTICATION ====================
 def login_user(username, password):
-    with get_db_connection() as conn:
-        lock_row = conn.execute("SELECT value FROM settings WHERE key = ?", (f"lockout_{username}",)).fetchone()
-        if lock_row:
-            try:
-                lock_until = datetime.fromisoformat(lock_row[0])
-                if lock_until > datetime.now():
-                    st.error("Account locked. Try again later or use ?unlock=unlock123")
-                    return None
-                else:
+    try:
+        with get_db_connection() as conn:
+            lock_row = conn.execute("SELECT value FROM settings WHERE key = ?", (f"lockout_{username}",)).fetchone()
+            if lock_row:
+                try:
+                    lock_until = datetime.fromisoformat(lock_row[0])
+                    if lock_until > datetime.now():
+                        st.error("Account locked. Try again later or use ?unlock=unlock123")
+                        return None
+                    else:
+                        conn.execute("DELETE FROM settings WHERE key = ?", (f"lockout_{username}",))
+                        conn.commit()
+                except Exception:
                     conn.execute("DELETE FROM settings WHERE key = ?", (f"lockout_{username}",))
                     conn.commit()
-            except Exception:
+
+            user = conn.execute("""
+                SELECT u.id, u.username, u.password_hash, u.full_name, u.email,
+                       u.role_id, u.must_change_password,
+                       r.name as role_name, r.permissions
+                FROM users u
+                JOIN roles r ON u.role_id = r.id
+                WHERE u.username = ? AND u.is_active = 1
+            """, (username,)).fetchone()
+
+            if user and check_password_hash(user[2], password):
+                conn.execute("DELETE FROM settings WHERE key = ?", (f"failures_{username}",))
                 conn.execute("DELETE FROM settings WHERE key = ?", (f"lockout_{username}",))
                 conn.commit()
-
-        user = conn.execute("""
-            SELECT u.id, u.username, u.password_hash, u.full_name, u.email,
-                   u.role_id, u.must_change_password,
-                   r.name as role_name, r.permissions
-            FROM users u
-            JOIN roles r ON u.role_id = r.id
-            WHERE u.username = ? AND u.is_active = 1
-        """, (username,)).fetchone()
-
-        if user and check_password_hash(user[2], password):
-            conn.execute("DELETE FROM settings WHERE key = ?", (f"failures_{username}",))
-            conn.execute("DELETE FROM settings WHERE key = ?", (f"lockout_{username}",))
-            conn.commit()
-            log_audit(user[0], "LOGIN", f"User {username} logged in")
-            return {
-                "id": user[0],
-                "username": user[1],
-                "full_name": user[3],
-                "email": user[4],
-                "role_id": user[5],
-                "must_change_password": user[6],
-                "role_name": user[7],
-                "permissions": user[8]
-            }
-        else:
-            fail_row = conn.execute("SELECT value FROM settings WHERE key = ?", (f"failures_{username}",)).fetchone()
-            fail_count = int(fail_row[0]) if fail_row else 0
-            fail_count += 1
-            conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)", (f"failures_{username}", str(fail_count)))
-            if fail_count >= LOGIN_ATTEMPT_LIMIT:
-                lock_until = (datetime.now() + timedelta(seconds=LOGIN_LOCKOUT_SECONDS)).isoformat()
-                conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)", (f"lockout_{username}", lock_until))
-                conn.commit()
-                st.error(f"Too many failed attempts. Account locked for {LOGIN_LOCKOUT_SECONDS} seconds.")
+                log_audit(user[0], "LOGIN", f"User {username} logged in")
+                return {
+                    "id": user[0],
+                    "username": user[1],
+                    "full_name": user[3],
+                    "email": user[4],
+                    "role_id": user[5],
+                    "must_change_password": user[6],
+                    "role_name": user[7],
+                    "permissions": user[8]
+                }
             else:
-                conn.commit()
-                st.error(f"Invalid credentials. {LOGIN_ATTEMPT_LIMIT - fail_count} attempts remaining.")
-            return None
+                fail_row = conn.execute("SELECT value FROM settings WHERE key = ?", (f"failures_{username}",)).fetchone()
+                fail_count = int(fail_row[0]) if fail_row else 0
+                fail_count += 1
+                conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)", (f"failures_{username}", str(fail_count)))
+                if fail_count >= LOGIN_ATTEMPT_LIMIT:
+                    lock_until = (datetime.now() + timedelta(seconds=LOGIN_LOCKOUT_SECONDS)).isoformat()
+                    conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)", (f"lockout_{username}", lock_until))
+                    conn.commit()
+                    st.error(f"Too many failed attempts. Account locked for {LOGIN_LOCKOUT_SECONDS} seconds.")
+                else:
+                    conn.commit()
+                    st.error(f"Invalid credentials. {LOGIN_ATTEMPT_LIMIT - fail_count} attempts remaining.")
+                return None
+    except Exception as e:
+        logger.error(f"Login error: {e}")
+        st.error("System error during login. Please try again.")
+        return None
 
 def change_password(user_id, new_password):
     if len(new_password) < 8 or not re.search(r"[A-Z]", new_password) or not re.search(r"[a-z]", new_password) or not re.search(r"[0-9]", new_password):
         raise ValueError("Password must be at least 8 characters with uppercase, lowercase, and digit.")
-    with get_db_connection() as conn:
-        conn.execute("UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?", (generate_password_hash(new_password), user_id))
-        conn.commit()
-        log_audit(user_id, "PASSWORD_CHANGE", "")
+    try:
+        with get_db_connection() as conn:
+            conn.execute("UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?", (generate_password_hash(new_password), user_id))
+            conn.commit()
+            log_audit(user_id, "PASSWORD_CHANGE", "")
+    except Exception as e:
+        logger.error(f"Password change error: {e}")
+        raise ValueError("Database error during password change.")
 
 def logout_user():
     if st.session_state.get('user'):
         log_audit(st.session_state.user['id'], "LOGOUT", "")
-    # Clear only session keys that matter
     keys_to_clear = ['logged_in', 'user', 'login_time', 'must_change_password', 'page', 'cart', 'pres_items', 'ai_msgs', 'edit_medicine']
     for key in keys_to_clear:
         if key in st.session_state:
@@ -383,12 +465,15 @@ MED_KNOWLEDGE = {
 def ai_response(q):
     q = q.lower()
     if "stock" in q or "available" in q:
-        with get_db_connection() as conn:
-            meds = conn.execute("SELECT name, current_stock FROM medicines WHERE current_stock>0 LIMIT 5").fetchall()
-        if meds:
-            return "📦 Stock:\n" + "\n".join([f"{m[0]}: {m[1]} units" for m in meds])
-        else:
-            return "No medicines in stock."
+        try:
+            with get_db_connection() as conn:
+                meds = conn.execute("SELECT name, current_stock FROM medicines WHERE current_stock>0 LIMIT 5").fetchall()
+            if meds:
+                return "📦 Stock:\n" + "\n".join([f"{m[0]}: {m[1]} units" for m in meds])
+            else:
+                return "No medicines in stock."
+        except:
+            return "Unable to fetch stock at the moment."
     if "expiring" in q:
         exp = get_expiring(30)
         if not exp.empty:
@@ -504,7 +589,6 @@ def render_medicines():
             if col4.button("🏷️", key=f"barcode_{r['id']}"):
                 img = generate_barcode(r['barcode'] or str(r['id']))
                 st.image(img, width=100)
-
     with tab2:
         med = st.session_state.get('edit_medicine', {})
         with get_db_connection() as conn:
@@ -545,7 +629,6 @@ def render_medicines():
                     st.success("Medicine added successfully")
                 conn.commit()
             st.rerun()
-
     with tab3:
         st.subheader("Manage Categories")
         new_cat = st.text_input("New Category Name")
@@ -644,7 +727,6 @@ def render_patients():
                 col2.write(f"🩸 Blood Group: {r['blood_group']}")
                 col2.write(f"⚠️ Allergies: {r['allergies'] or 'None'}")
                 col2.write(f"📅 DOB: {r['date_of_birth']}")
-
     with tab2:
         st.subheader("Register New Patient")
         col1, col2 = st.columns(2)
@@ -1172,7 +1254,10 @@ def render_audit_logs():
 def render_advanced_features():
     require_permission("advanced")
     st.title("🚀 Advanced Features")
-    tab1, tab2, tab3, tab4 = st.tabs(["Drug Interactions", "Stock Forecasting", "Loyalty Program", "Appointments"])
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+        "Drug Interactions", "Stock Forecasting", "Loyalty Program", "Appointments",
+        "Usage Analytics", "Auto POs"
+    ])
     with tab1:
         with get_db_connection() as conn:
             meds = conn.execute("SELECT id, name FROM medicines").fetchall()
@@ -1257,6 +1342,38 @@ def render_advanced_features():
                 st.rerun()
         else:
             st.info("No patients registered. Add patients first.")
+    with tab5:
+        st.subheader("Usage Analytics")
+        col1, col2 = st.columns(2)
+        with col1:
+            days = st.number_input("Days (last N days)", min_value=7, max_value=365, value=30)
+        with col2:
+            with get_db_connection() as conn:
+                all_meds = conn.execute("SELECT id, name FROM medicines").fetchall()
+            med_choice = st.selectbox("Select Medicine (optional)", ["All Medicines"] + [m[1] for m in all_meds])
+        df_usage = usage_analytics(None if med_choice == "All Medicines" else next(m[0] for m in all_meds if m[1] == med_choice), days)
+        if not df_usage.empty:
+            fig = px.line(df_usage, x='date', y='quantity', title=f"Daily Consumption - {med_choice}")
+            st.plotly_chart(fig, use_container_width=True)
+            st.dataframe(df_usage)
+        else:
+            st.info("No sales data for the selected period.")
+    with tab6:
+        st.subheader("Automated Purchase Orders")
+        if st.button("Generate POs for Low-Stock Items"):
+            count = auto_create_purchase_orders()
+            if count:
+                st.success(f"Generated {count} purchase order(s) for low-stock medicines.")
+            else:
+                st.info("No low-stock items requiring purchase orders.")
+        with get_db_connection() as conn:
+            pos = conn.execute("SELECT * FROM purchase_orders WHERE po_number LIKE 'POAUTO%' ORDER BY created_at DESC LIMIT 20").fetchall()
+        if pos:
+            st.subheader("Recent Auto‑Generated POs")
+            df_po = pd.DataFrame([dict(r) for r in pos])
+            st.dataframe(df_po[['po_number', 'order_date', 'expected_delivery', 'status']])
+        else:
+            st.info("No auto‑generated purchase orders yet.")
 
 def render_ai_assistant():
     require_permission("all")
@@ -1330,30 +1447,32 @@ def render_settings():
 
 # ==================== MAIN ====================
 def main():
-    # Set page config first
+    # Security & SEO headers
     st.set_page_config(
         page_title="Pharmacy Management System",
         page_icon="💊",
         layout="wide",
         initial_sidebar_state="expanded"
     )
-    # Add meta description and main landmark for accessibility/SEO
-    st.markdown(
-        """
-        <meta name="description" content="Complete Pharmacy Management System with inventory,
-        sales, prescriptions, AI assistant, and full reporting. Secure, accessible, and production-ready.">
-        <main role="main" style="display:block">
-        """,
-        unsafe_allow_html=True
-    )
+    # Insert meta tags for SEO and security
+    st.markdown("""
+    <meta name="description" content="Complete Pharmacy Management System with inventory, sales, prescriptions, AI assistant, and full reporting. Secure, accessible, and production-ready.">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:;">
+    <meta http-equiv="Strict-Transport-Security" content="max-age=31536000; includeSubDomains; preload">
+    <meta http-equiv="Cross-Origin-Opener-Policy" content="same-origin">
+    <meta http-equiv="Cross-Origin-Embedder-Policy" content="require-corp">
+    <meta http-equiv="Trusted-Types" content="allow-duplicates;">
+    <main role="main" style="display:block">
+    """, unsafe_allow_html=True)
 
-    # Initialise database and clear lockouts once
+    # Initialise DB once
     if 'db_initialised' not in st.session_state:
         init_db()
         clear_all_lockouts()
         st.session_state.db_initialised = True
 
-    # Emergency unlock/reset via URL parameters
+    # Emergency unlock/reset
     qp = st.query_params
     if "unlock" in qp and qp["unlock"] == UNLOCK_SECRET:
         clear_all_lockouts()
@@ -1396,7 +1515,7 @@ def main():
         st.markdown("</main>", unsafe_allow_html=True)
         return
 
-    # After login – check session timeout and forced password change
+    # After login
     check_session_timeout()
     if st.session_state.user.get('must_change_password'):
         st.title("🔐 Change Required Password")
@@ -1494,4 +1613,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
