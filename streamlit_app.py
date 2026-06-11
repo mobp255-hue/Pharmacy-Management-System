@@ -1,23 +1,7 @@
 #!/usr/bin/env python
 """
-╔═══════════════════════════════════════════════════════════════════════════════╗
-║                    PHARMACY MANAGEMENT SYSTEM                                 ║
-║                    Copyright © Isaac Madungwe 2026-2030                        ║
-║                    All Rights Reserved                                        ║
-║                                                                               ║
-║    Features:                                                                  ║
-║    - Full inventory with batch/FEFO and expiry alerts                        ║
-║    - Patient management, prescriptions, pharmacist approval                  ║
-║    - Sales & billing with GST, discount, loyalty points, PDF invoice         ║
-║    - Sales returns (refund + stock restoration)                              ║
-║    - Label printing with QR and barcode                                      ║
-║    - Supplier & purchase order management                                    ║
-║    - Staff management, roles, attendance                                     ║
-║    - Real‑time notifications, audit logs                                     ║
-║    - Drug interactions, stock forecasting, loyalty program, appointments     ║
-║    - AI Assistant (symptom advice, stock/expiry queries)                     ║
-║    - Complete settings (pharmacy info, GST rate, backup)                     ║
-╚═══════════════════════════════════════════════════════════════════════════════╝
+PHARMACY MANAGEMENT SYSTEM - FINAL PRODUCTION VERSION
+Copyright © Isaac Madungwe 2026-2030
 """
 
 import os
@@ -32,7 +16,6 @@ from datetime import datetime, timedelta, date
 from typing import Dict, Optional, List
 import numpy as np
 
-# ==================== DEPENDENCY CHECK ====================
 try:
     import streamlit as st
     import pandas as pd
@@ -46,25 +29,24 @@ try:
     from PIL import Image
     from werkzeug.security import generate_password_hash, check_password_hash
 except ImportError as e:
-    st.error(f"Missing required library: {e}")
+    st.error(f"Missing library: {e}")
     st.info("Run: pip install streamlit pandas bcrypt plotly fpdf qrcode python-barcode Pillow werkzeug numpy")
     st.stop()
 
 # ==================== CONFIGURATION ====================
 DB_PATH = "pharmacy_management.db"
-SESSION_TIMEOUT_SECONDS = 1800          # 30 minutes
+SESSION_TIMEOUT_SECONDS = 1800
 LOGIN_ATTEMPT_LIMIT = 5
-LOGIN_LOCKOUT_SECONDS = 300             # 5 minutes
+LOGIN_LOCKOUT_SECONDS = 300
 
-# Admin credentials (can be overridden by environment variable)
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "Admin@123456")
-RESET_SECRET = os.environ.get("RESET_SECRET", "reset123")      # emergency password reset
-UNLOCK_SECRET = os.environ.get("UNLOCK_SECRET", "unlock123")   # clear lockouts
+RESET_SECRET = os.environ.get("RESET_SECRET", "reset123")
+UNLOCK_SECRET = os.environ.get("UNLOCK_SECRET", "unlock123")
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# ==================== DATABASE SETUP ====================
+# ==================== DATABASE ====================
 def get_db_connection():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.execute("PRAGMA foreign_keys = ON")
@@ -73,17 +55,14 @@ def get_db_connection():
     return conn
 
 def clear_all_lockouts():
-    """Remove any lockout records and failure counters from the settings table."""
     with get_db_connection() as conn:
         conn.execute("DELETE FROM settings WHERE key LIKE 'lockout_%' OR key LIKE 'failures_%'")
         conn.commit()
 
 def init_db():
-    """Create all tables and default data if they don't exist."""
     with get_db_connection() as conn:
         cur = conn.cursor()
-
-        # ----- Tables -----
+        # ========== TABLES ==========
         cur.execute("CREATE TABLE IF NOT EXISTS roles (id INTEGER PRIMARY KEY, name TEXT UNIQUE, permissions TEXT)")
         cur.execute("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, username TEXT UNIQUE, password_hash TEXT, full_name TEXT, email TEXT, role_id INTEGER, is_active INTEGER DEFAULT 1, must_change_password INTEGER DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(role_id) REFERENCES roles(id))")
         cur.execute("CREATE TABLE IF NOT EXISTS categories (id INTEGER PRIMARY KEY, name TEXT UNIQUE, description TEXT)")
@@ -111,7 +90,7 @@ def init_db():
         cur.execute("CREATE TABLE IF NOT EXISTS drug_interactions (id INTEGER PRIMARY KEY, medicine1_id INTEGER, medicine2_id INTEGER, severity TEXT, description TEXT, FOREIGN KEY(medicine1_id) REFERENCES medicines(id), FOREIGN KEY(medicine2_id) REFERENCES medicines(id))")
         cur.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
 
-        # ----- Default roles -----
+        # Default roles
         roles = [
             ("Admin", '{"all":true}'),
             ("Manager", '{"medicines":true,"inventory":true,"suppliers":true,"reports":true,"staff":true,"audit":true}'),
@@ -121,22 +100,16 @@ def init_db():
         for name, perms in roles:
             cur.execute("INSERT OR IGNORE INTO roles (name, permissions) VALUES (?,?)", (name, perms))
 
-        # ----- Ensure admin user exists -----
         admin_role = cur.execute("SELECT id FROM roles WHERE name='Admin'").fetchone()
         admin_exists = cur.execute("SELECT id FROM users WHERE username='admin'").fetchone()
         if not admin_exists and admin_role:
             cur.execute("INSERT INTO users (username, password_hash, full_name, email, role_id, must_change_password) VALUES (?,?,?,?,?,1)",
                         ("admin", generate_password_hash(ADMIN_PASSWORD), "System Administrator", "admin@pharmacy.com", admin_role[0]))
-        elif admin_exists and admin_role:
-            # Optionally update password if needed (skip)
-            pass
 
-        # ----- Default categories -----
         categories = ["Antibiotics","Analgesics","Antipyretics","Vitamins","Antihistamines","Dermatologicals"]
         for cat in categories:
             cur.execute("INSERT OR IGNORE INTO categories (name) VALUES (?)", (cat,))
 
-        # ----- Default settings -----
         default_settings = {
             "pharmacy_name": "HealthPlus Pharmacy",
             "pharmacy_address": "123 Main Street, City",
@@ -150,13 +123,10 @@ def init_db():
         }
         for key, val in default_settings.items():
             cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?,?)", (key, val))
-
         conn.commit()
 
-    # Clear any stale lockouts at startup
     clear_all_lockouts()
 
-# Run initialisation
 init_db()
 
 # ==================== HELPER FUNCTIONS ====================
@@ -301,7 +271,6 @@ def stock_forecast(medicine_id, days=30):
 # ==================== AUTHENTICATION ====================
 def login_user(username, password):
     with get_db_connection() as conn:
-        # Check for a valid lockout
         lock_row = conn.execute("SELECT value FROM settings WHERE key = ?", (f"lockout_{username}",)).fetchone()
         if lock_row:
             try:
@@ -326,7 +295,6 @@ def login_user(username, password):
         """, (username,)).fetchone()
 
         if user and check_password_hash(user[2], password):
-            # Successful login – clear failures and lockout
             conn.execute("DELETE FROM settings WHERE key = ?", (f"failures_{username}",))
             conn.execute("DELETE FROM settings WHERE key = ?", (f"lockout_{username}",))
             conn.commit()
@@ -342,7 +310,6 @@ def login_user(username, password):
                 "permissions": user[8]
             }
         else:
-            # Failed attempt – increment counter
             fail_row = conn.execute("SELECT value FROM settings WHERE key = ?", (f"failures_{username}",)).fetchone()
             fail_count = int(fail_row[0]) if fail_row else 0
             fail_count += 1
@@ -445,7 +412,6 @@ def render_dashboard():
     if not exp.empty:
         st.error(f"⚠️ Expiring soon: {len(exp)} batches within 30 days")
 
-    # Sales trend last 7 days
     with get_db_connection() as conn:
         trend = conn.execute("""
             SELECT DATE(created_at) as d, SUM(net_amount) as s
@@ -458,7 +424,6 @@ def render_dashboard():
         fig = px.line(df, x='date', y='sales', title='Last 7 Days Sales')
         st.plotly_chart(fig, use_container_width=True)
 
-    # Top selling medicines
     with get_db_connection() as conn:
         top = conn.execute("""
             SELECT m.name, SUM(si.quantity) as sold
@@ -599,7 +564,7 @@ def render_inventory():
                     conn.commit()
                 st.success("Stock added")
                 st.rerun()
-        else:  # Stock Out
+        else:
             if st.button("Deduct Stock"):
                 try:
                     batches = get_best_batch(med_id, qty)
@@ -612,7 +577,6 @@ def render_inventory():
                     st.rerun()
                 except ValueError as e:
                     st.error(str(e))
-
     with tab2:
         with get_db_connection() as conn:
             batches = conn.execute("""
@@ -948,6 +912,289 @@ def render_label_printing():
         qr.save(qr_path)
         pdf.image(qr_path, x=150, y=80, w=40)
         os.unlink(qr_path)
+        pdf_bytes = pdf.output(dest='S').encode('latin1')
+        st.download_button("Download Label (PDF)", data=pdf_bytes, file_name=f"label_{med[1]}.pdf", mime="application/pdf")
+
+def render_suppliers():
+    require_permission("suppliers")
+    st.title("🚚 Supplier Management")
+    with get_db_connection() as conn:
+        sups = conn.execute("SELECT * FROM suppliers").fetchall()
+    for s in sups:
+        with st.expander(f"{s['name']} - {s.get('contact_person', '')}"):
+            col1, col2 = st.columns(2)
+            col1.write(f"📞 {s['phone']}")
+            col1.write(f"📧 {s['email']}")
+            col2.write(f"GST: {s['gst_number']}")
+            col2.write(f"Terms: {s['payment_terms']}")
+    st.subheader("Add New Supplier")
+    with st.form("add_supplier"):
+        name = st.text_input("Supplier Name")
+        contact = st.text_input("Contact Person")
+        phone = st.text_input("Phone")
+        email = st.text_input("Email")
+        address = st.text_area("Address")
+        gst = st.text_input("GST Number")
+        terms = st.text_input("Payment Terms")
+        if st.form_submit_button("Add Supplier"):
+            if name:
+                with get_db_connection() as conn:
+                    conn.execute("""
+                        INSERT INTO suppliers (name, contact_person, phone, email, address, gst_number, payment_terms)
+                        VALUES (?,?,?,?,?,?,?)
+                    """, (name, contact, phone, email, address, gst, terms))
+                    conn.commit()
+                st.rerun()
+            else:
+                st.error("Supplier name is required")
+
+def render_reports():
+    require_permission("reports")
+    st.title("📊 Reports")
+    report_type = st.selectbox("Select Report", ["Daily Sales", "Monthly Sales", "Inventory Report", "Expiry Report", "Profit Report"])
+    if report_type == "Daily Sales":
+        date_sel = st.date_input("Select Date", datetime.now().date())
+        with get_db_connection() as conn:
+            rows = conn.execute("""
+                SELECT s.invoice_number, s.net_amount, s.payment_method, s.created_at, u.full_name
+                FROM sales s
+                JOIN users u ON s.user_id = u.id
+                WHERE DATE(s.created_at) = ?
+            """, (date_sel.isoformat(),)).fetchall()
+        df = pd.DataFrame([dict(r) for r in rows])
+        st.dataframe(df)
+        if not df.empty:
+            st.metric("Total Sales", f"${df['net_amount'].sum():.2f}")
+            buf = io.BytesIO()
+            with pd.ExcelWriter(buf, engine='openpyxl') as writer:
+                df.to_excel(writer, index=False)
+            st.download_button("Export to Excel", data=buf.getvalue(), file_name=f"sales_{date_sel}.xlsx")
+    elif report_type == "Monthly Sales":
+        month = st.selectbox("Month", range(1,13), format_func=lambda x: datetime(2000,x,1).strftime("%B"))
+        year = st.number_input("Year", min_value=2020, value=datetime.now().year)
+        with get_db_connection() as conn:
+            rows = conn.execute("""
+                SELECT strftime('%Y-%m-%d', created_at) as day, SUM(net_amount) as sales
+                FROM sales
+                WHERE strftime('%Y', created_at) = ? AND strftime('%m', created_at) = ?
+                GROUP BY day
+                ORDER BY day
+            """, (str(year), f"{month:02d}")).fetchall()
+        if rows:
+            df = pd.DataFrame([{"date": r[0], "sales": r[1]} for r in rows])
+            fig = px.line(df, x='date', y='sales', title=f"{datetime(year,month,1).strftime('%B %Y')} Sales")
+            st.plotly_chart(fig)
+    elif report_type == "Inventory Report":
+        with get_db_connection() as conn:
+            rows = conn.execute("SELECT name, current_stock, reorder_level, unit_price FROM medicines").fetchall()
+        df = pd.DataFrame([dict(r) for r in rows])
+        st.dataframe(df)
+        fig = px.bar(df, x='name', y='current_stock', title='Current Stock Levels')
+        st.plotly_chart(fig)
+    elif report_type == "Expiry Report":
+        expiring = get_expiring(90)
+        st.dataframe(expiring)
+        if not expiring.empty:
+            fig = px.bar(expiring, x='name', y='qty', color='expiry', title='Expiring Batches (Next 90 Days)')
+            st.plotly_chart(fig)
+    elif report_type == "Profit Report":
+        with get_db_connection() as conn:
+            rows = conn.execute("""
+                SELECT strftime('%Y-%m', created_at) as month, SUM(net_amount) as total_sales
+                FROM sales
+                GROUP BY month
+                ORDER BY month DESC
+                LIMIT 6
+            """).fetchall()
+        if rows:
+            df = pd.DataFrame([{"month": r[0], "sales": r[1]} for r in rows])
+            fig = px.line(df, x='month', y='sales', title='Monthly Sales Trend (Last 6 Months)')
+            st.plotly_chart(fig)
+
+def render_staff_management():
+    require_permission("staff")
+    st.title("👨‍💼 Staff Management")
+    tab1, tab2, tab3 = st.tabs(["Employees", "Roles", "Attendance"])
+    with tab1:
+        with get_db_connection() as conn:
+            users = conn.execute("SELECT u.*, r.name as role_name FROM users u JOIN roles r ON u.role_id = r.id").fetchall()
+        for u in users:
+            st.write(f"{u['full_name']} ({u['username']}) - {u['role_name']}")
+        st.subheader("Add New Employee")
+        with st.form("add_employee"):
+            uname = st.text_input("Username")
+            pwd = st.text_input("Password", type="password")
+            full = st.text_input("Full Name")
+            email = st.text_input("Email")
+            with get_db_connection() as conn:
+                roles = conn.execute("SELECT id, name FROM roles").fetchall()
+            role_opts = {r[0]: r[1] for r in roles}
+            role = st.selectbox("Role", list(role_opts.keys()), format_func=lambda x: role_opts[x])
+            if st.form_submit_button("Add Employee"):
+                if uname and pwd and full:
+                    with get_db_connection() as conn:
+                        conn.execute("""
+                            INSERT INTO users (username, password_hash, full_name, email, role_id, must_change_password)
+                            VALUES (?,?,?,?,?,1)
+                        """, (uname, generate_password_hash(pwd), full, email, role))
+                        conn.commit()
+                    st.success(f"Employee {full} added")
+                    st.rerun()
+                else:
+                    st.error("Please fill all required fields")
+    with tab2:
+        st.subheader("Role Permissions")
+        with get_db_connection() as conn:
+            roles = conn.execute("SELECT * FROM roles").fetchall()
+            for r in roles:
+                st.write(f"**{r['name']}**")
+                perms = json.loads(r['permissions'])
+                st.json(perms)
+    with tab3:
+        st.subheader("Today's Attendance")
+        today = date.today()
+        with get_db_connection() as conn:
+            staff = conn.execute("SELECT id, full_name FROM users WHERE is_active = 1").fetchall()
+        for emp in staff:
+            col1, col2, col3 = st.columns([2,1,1])
+            col1.write(emp[1])
+            check_in = col2.time_input("Check In", value=datetime.now().time(), key=f"in_{emp[0]}")
+            check_out = col3.time_input("Check Out", value=datetime.now().time(), key=f"out_{emp[0]}")
+            if st.button(f"Mark Attendance", key=f"att_{emp[0]}"):
+                with get_db_connection() as conn:
+                    conn.execute("""
+                        INSERT OR REPLACE INTO staff_attendance (user_id, date, check_in, check_out, status)
+                        VALUES (?,?,?,?,'present')
+                    """, (emp[0], today, check_in.strftime("%H:%M"), check_out.strftime("%H:%M")))
+                    conn.commit()
+                st.success(f"Attendance marked for {emp[1]}")
+
+def render_notifications():
+    require_permission("all")
+    st.title("🔔 Notifications")
+    with get_db_connection() as conn:
+        notifs = conn.execute("SELECT * FROM notifications ORDER BY created_at DESC").fetchall()
+    for n in notifs:
+        if n['type'] == 'warning':
+            st.warning(f"**{n['title']}**: {n['message']}")
+        elif n['type'] == 'danger':
+            st.error(f"**{n['title']}**: {n['message']}")
+        else:
+            st.info(f"**{n['title']}**: {n['message']}")
+    if st.button("Clear All Notifications"):
+        with get_db_connection() as conn:
+            conn.execute("DELETE FROM notifications")
+            conn.commit()
+        st.rerun()
+
+def render_audit_logs():
+    require_permission("audit")
+    st.title("📜 Audit Logs")
+    with get_db_connection() as conn:
+        logs = conn.execute("""
+            SELECT al.*, u.full_name
+            FROM audit_logs al
+            LEFT JOIN users u ON al.user_id = u.id
+            ORDER BY al.created_at DESC
+            LIMIT 100
+        """).fetchall()
+    df = pd.DataFrame([dict(r) for r in logs])
+    st.dataframe(df[['created_at', 'full_name', 'action', 'details']])
+
+def render_advanced_features():
+    require_permission("advanced")
+    st.title("🚀 Advanced Features")
+    tab1, tab2, tab3, tab4 = st.tabs(["Drug Interactions", "Stock Forecasting", "Loyalty Program", "Appointments"])
+    with tab1:
+        with get_db_connection() as conn:
+            meds = conn.execute("SELECT id, name FROM medicines").fetchall()
+        opts = {m[0]: m[1] for m in meds}
+        if opts:
+            med1 = st.selectbox("Medicine 1", list(opts.keys()), format_func=lambda x: opts[x], key="inter1")
+            med2 = st.selectbox("Medicine 2", list(opts.keys()), format_func=lambda x: opts[x], key="inter2")
+            if st.button("Check Interaction"):
+                with get_db_connection() as conn:
+                    inter = conn.execute("""
+                        SELECT severity, description FROM drug_interactions
+                        WHERE (medicine1_id = ? AND medicine2_id = ?) OR (medicine1_id = ? AND medicine2_id = ?)
+                    """, (med1, med2, med2, med1)).fetchone()
+                if inter:
+                    st.warning(f"⚠️ Interaction Found: {inter[0]} severity - {inter[1]}")
+                else:
+                    st.success("No known interactions between these medicines.")
+            st.subheader("Add New Interaction")
+            sev = st.selectbox("Severity", ["Mild", "Moderate", "Severe"])
+            desc = st.text_area("Description")
+            if st.button("Add Interaction"):
+                with get_db_connection() as conn:
+                    conn.execute("""
+                        INSERT INTO drug_interactions (medicine1_id, medicine2_id, severity, description)
+                        VALUES (?,?,?,?)
+                    """, (med1, med2, sev, desc))
+                    conn.commit()
+                st.success("Interaction added")
+        else:
+            st.info("Add medicines first to define interactions.")
+    with tab2:
+        with get_db_connection() as conn:
+            meds = conn.execute("SELECT id, name FROM medicines").fetchall()
+        if meds:
+            med_for = st.selectbox("Select Medicine", [m[1] for m in meds])
+            if med_for:
+                med_id = next(m[0] for m in meds if m[1] == med_for)
+                forecast = stock_forecast(med_id, 30)
+                if forecast:
+                    st.info(f"📈 Forecast for next 30 days: **{forecast} units**")
+                else:
+                    st.warning("Insufficient sales data for forecasting. Add more sales first.")
+        else:
+            st.info("No medicines available")
+    with tab3:
+        with get_db_connection() as conn:
+            loyalty = conn.execute("""
+                SELECT p.first_name, p.last_name, lp.points
+                FROM loyalty_points lp
+                JOIN patients p ON lp.patient_id = p.id
+                ORDER BY lp.points DESC
+            """).fetchall()
+        if loyalty:
+            df = pd.DataFrame([{"name": f"{r[0]} {r[1]}", "points": r[2]} for r in loyalty])
+            st.dataframe(df)
+            st.metric("Total Points Issued", df['points'].sum())
+            points_to_redeem = st.number_input("Redeem Points (100 points = $1)", min_value=0, max_value=int(df['points'].max() if not df.empty else 0))
+            if st.button("Redeem"):
+                st.info(f"Redeeming {points_to_redeem} points would give ${points_to_redeem/100:.2f} discount.")
+        else:
+            st.info("No loyalty data yet. Points are earned from sales.")
+    with tab4:
+        with get_db_connection() as conn:
+            patients = conn.execute("SELECT id, patient_id, first_name, last_name FROM patients").fetchall()
+        pat_opts = {p[0]: f"{p[2]} {p[3]} ({p[1]})" for p in patients}
+        if pat_opts:
+            patient_id = st.selectbox("Patient", list(pat_opts.keys()), format_func=lambda x: pat_opts[x])
+            app_date = st.date_input("Appointment Date", min_value=datetime.now().date())
+            app_time = st.time_input("Appointment Time")
+            purpose = st.text_input("Purpose")
+            if st.button("Book Appointment"):
+                with get_db_connection() as conn:
+                    conn.execute("""
+                        INSERT INTO appointments (patient_id, appointment_date, appointment_time, purpose)
+                        VALUES (?,?,?,?)
+                    """, (patient_id, app_date, app_time.strftime("%H:%M"), purpose))
+                    conn.commit()
+                st.success("Appointment booked successfully")
+                st.rerun()
+        else:
+            st.info("No patients registered. Add patients first.")
+
+def render_ai_assistant():
+    require_permission("all")
+    st.title("🤖 AI Pharmacy Assistant")
+    st.markdown("Ask me about medicines, symptoms, stock status, expiries, or drug interactions.")
+    if "ai_msgs" not in st.session_state:
+        st.session_state.ai_msgs = [{"role": "assistant", "content": "Hello! I'm your pharmacy AI assistant. How can I help you today?"}]
+    for msg in st.session_state.ai_msgs:
+        if msg["role"] == "user":
             st.chat_message("user").write(msg["content"])
         else:
             st.chat_message("assistant").write(msg["content"])
@@ -995,7 +1242,6 @@ def render_settings():
             st.download_button("Download Backup", data=f, file_name=backup_name, mime="application/octet-stream")
     restore_file = st.file_uploader("Restore from Backup (SQLite .db file)", type=['db'])
     if restore_file and st.button("Restore Backup"):
-        # Validate file
         temp_path = tempfile.NamedTemporaryFile(delete=False, suffix=".db").name
         with open(temp_path, "wb") as f:
             f.write(restore_file.getbuffer())
@@ -1010,13 +1256,11 @@ def render_settings():
             st.error(f"Invalid backup file: {e}")
             os.unlink(temp_path)
 
-# ==================== MAIN APPLICATION ====================
+# ==================== MAIN ====================
 def main():
-    # Initialise database and clear any leftover lockouts
     init_db()
     clear_all_lockouts()
 
-    # Check for emergency unlock/reset via URL parameters
     qp = st.query_params
     if "unlock" in qp and qp["unlock"] == UNLOCK_SECRET:
         clear_all_lockouts()
@@ -1029,10 +1273,10 @@ def main():
                 conn.execute("UPDATE users SET password_hash = ?, must_change_password = 1 WHERE id = ?",
                              (generate_password_hash(ADMIN_PASSWORD), admin[0]))
                 conn.commit()
-                st.success("Admin password has been reset to the configured ADMIN_PASSWORD. Please log in and change it immediately.")
+                st.success("Admin password has been reset. Please log in and change it immediately.")
                 st.stop()
             else:
-                st.error("Admin user not found. Please re‑initialize the database.")
+                st.error("Admin user not found.")
 
     if not st.session_state.get('logged_in'):
         st.set_page_config(page_title="Pharmacy Management System", layout="wide")
@@ -1059,7 +1303,6 @@ def main():
             st.caption("If locked out, add ?unlock=unlock123 to the URL")
         return
 
-    # Logged in
     check_session_timeout()
     if st.session_state.user.get('must_change_password'):
         st.title("🔐 Change Required Password")
