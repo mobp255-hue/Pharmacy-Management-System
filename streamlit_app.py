@@ -2,10 +2,9 @@
 """
 PHARMACY MANAGEMENT SYSTEM
 Copyright © Isaac Madungwe 2026-2030
-All modules: Dashboard, Medicines, Inventory, Patients, Prescriptions,
-Sales & Billing, Sales Returns, Label Printing, Suppliers, Reports,
-Staff Management, Notifications, Audit Logs, Advanced Features (incl.
-Usage Analytics & Auto POs), AI Assistant, Settings.
+All rights reserved.
+
+Run: streamlit run pharmacy_system.py
 """
 
 import os
@@ -20,6 +19,7 @@ from datetime import datetime, timedelta, date
 from typing import Dict, Optional, List
 import numpy as np
 
+# ==================== DEPENDENCY CHECK ====================
 try:
     import streamlit as st
     import pandas as pd
@@ -67,24 +67,29 @@ def init_db():
     with get_db_connection() as conn:
         cur = conn.cursor()
         # ========== TABLES ==========
+        # Core tables
         cur.execute("CREATE TABLE IF NOT EXISTS roles (id INTEGER PRIMARY KEY, name TEXT UNIQUE, permissions TEXT)")
         cur.execute("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, username TEXT UNIQUE, password_hash TEXT, full_name TEXT, email TEXT, role_id INTEGER, is_active INTEGER DEFAULT 1, must_change_password INTEGER DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(role_id) REFERENCES roles(id))")
+        cur.execute("CREATE TABLE IF NOT EXISTS branches (id INTEGER PRIMARY KEY, name TEXT UNIQUE, address TEXT, phone TEXT, email TEXT)")
         cur.execute("CREATE TABLE IF NOT EXISTS categories (id INTEGER PRIMARY KEY, name TEXT UNIQUE, description TEXT)")
-        cur.execute("CREATE TABLE IF NOT EXISTS medicines (id INTEGER PRIMARY KEY, name TEXT, generic_name TEXT, category_id INTEGER, barcode TEXT UNIQUE, manufacturer TEXT, unit_price REAL, reorder_level INTEGER DEFAULT 10, current_stock INTEGER DEFAULT 0, description TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(category_id) REFERENCES categories(id))")
+        cur.execute("CREATE TABLE IF NOT EXISTS departments (id INTEGER PRIMARY KEY, name TEXT UNIQUE, description TEXT)")
+        cur.execute("CREATE TABLE IF NOT EXISTS manufacturers (id INTEGER PRIMARY KEY, name TEXT UNIQUE, contact_person TEXT, phone TEXT, email TEXT)")
+        cur.execute("CREATE TABLE IF NOT EXISTS drug_forms (id INTEGER PRIMARY KEY, name TEXT UNIQUE)")
+        cur.execute("CREATE TABLE IF NOT EXISTS therapeutic_classes (id INTEGER PRIMARY KEY, name TEXT UNIQUE, code TEXT)")
+        cur.execute("CREATE TABLE IF NOT EXISTS medical_aids (id INTEGER PRIMARY KEY, name TEXT UNIQUE, code TEXT, contact_person TEXT, phone TEXT, email TEXT, address TEXT)")
+        cur.execute("CREATE TABLE IF NOT EXISTS suppliers (id INTEGER PRIMARY KEY, name TEXT, contact_person TEXT, phone TEXT, email TEXT, address TEXT, gst_number TEXT, payment_terms TEXT, is_active INTEGER DEFAULT 1)")
+        cur.execute("CREATE TABLE IF NOT EXISTS medicines (id INTEGER PRIMARY KEY, name TEXT, generic_name TEXT, category_id INTEGER, department_id INTEGER, manufacturer_id INTEGER, drug_form_id INTEGER, therapeutic_class_id INTEGER, barcode TEXT UNIQUE, supplier_id INTEGER, unit_price REAL, reorder_level INTEGER DEFAULT 10, current_stock INTEGER DEFAULT 0, description TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(category_id) REFERENCES categories(id), FOREIGN KEY(department_id) REFERENCES departments(id), FOREIGN KEY(manufacturer_id) REFERENCES manufacturers(id), FOREIGN KEY(drug_form_id) REFERENCES drug_forms(id), FOREIGN KEY(therapeutic_class_id) REFERENCES therapeutic_classes(id), FOREIGN KEY(supplier_id) REFERENCES suppliers(id))")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_medicines_name ON medicines(name)")
         cur.execute("CREATE TABLE IF NOT EXISTS batches (id INTEGER PRIMARY KEY, medicine_id INTEGER, batch_number TEXT, quantity INTEGER, expiry_date DATE, purchase_price REAL, selling_price REAL, mrp REAL, supplier_id INTEGER, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(medicine_id) REFERENCES medicines(id), FOREIGN KEY(supplier_id) REFERENCES suppliers(id))")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_batches_expiry ON batches(expiry_date)")
-        cur.execute("CREATE TABLE IF NOT EXISTS inventory_transactions (id INTEGER PRIMARY KEY, medicine_id INTEGER, batch_id INTEGER, transaction_type TEXT, quantity INTEGER, reference_id TEXT, notes TEXT, created_by INTEGER, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(medicine_id) REFERENCES medicines(id), FOREIGN KEY(batch_id) REFERENCES batches(id))")
-        cur.execute("CREATE TABLE IF NOT EXISTS patients (id INTEGER PRIMARY KEY, patient_id TEXT UNIQUE, first_name TEXT, last_name TEXT, date_of_birth DATE, gender TEXT, phone TEXT, email TEXT, address TEXT, insurance_provider TEXT, insurance_number TEXT, blood_group TEXT, allergies TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
-        cur.execute("CREATE TABLE IF NOT EXISTS medical_history (id INTEGER PRIMARY KEY, patient_id INTEGER, condition TEXT, diagnosis_date DATE, notes TEXT, FOREIGN KEY(patient_id) REFERENCES patients(id))")
+        cur.execute("CREATE TABLE IF NOT EXISTS inventory_transactions (id INTEGER PRIMARY KEY, medicine_id INTEGER, batch_id INTEGER, transaction_type TEXT, quantity INTEGER, reference_id TEXT, notes TEXT, created_by INTEGER, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(medicine_id) REFERENCES medicines(id), FOREIGN KEY(batch_id) REFERENCES batches(id), FOREIGN KEY(created_by) REFERENCES users(id))")
+        cur.execute("CREATE TABLE IF NOT EXISTS patients (id INTEGER PRIMARY KEY, patient_id TEXT UNIQUE, first_name TEXT, last_name TEXT, date_of_birth DATE, gender TEXT, phone TEXT, email TEXT, address TEXT, medical_aid_id INTEGER, medical_aid_number TEXT, blood_group TEXT, allergies TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(medical_aid_id) REFERENCES medical_aids(id))")
         cur.execute("CREATE TABLE IF NOT EXISTS prescriptions (id INTEGER PRIMARY KEY, prescription_number TEXT UNIQUE, patient_id INTEGER, doctor_name TEXT, prescribed_date DATE, expiry_date DATE, status TEXT DEFAULT 'pending', pharmacist_notes TEXT, approved_by INTEGER, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(patient_id) REFERENCES patients(id), FOREIGN KEY(approved_by) REFERENCES users(id))")
         cur.execute("CREATE TABLE IF NOT EXISTS prescription_items (id INTEGER PRIMARY KEY, prescription_id INTEGER, medicine_id INTEGER, dosage TEXT, duration TEXT, instructions TEXT, quantity INTEGER, FOREIGN KEY(prescription_id) REFERENCES prescriptions(id), FOREIGN KEY(medicine_id) REFERENCES medicines(id))")
         cur.execute("CREATE TABLE IF NOT EXISTS sales (id INTEGER PRIMARY KEY, invoice_number TEXT UNIQUE, patient_id INTEGER, user_id INTEGER, total_amount REAL, discount REAL DEFAULT 0, tax REAL DEFAULT 0, net_amount REAL, payment_method TEXT, payment_status TEXT DEFAULT 'completed', loyalty_points_earned INTEGER DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(patient_id) REFERENCES patients(id), FOREIGN KEY(user_id) REFERENCES users(id))")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_sales_date ON sales(created_at)")
         cur.execute("CREATE TABLE IF NOT EXISTS sale_items (id INTEGER PRIMARY KEY, sale_id INTEGER, medicine_id INTEGER, batch_id INTEGER, quantity INTEGER, unit_price REAL, total REAL, FOREIGN KEY(sale_id) REFERENCES sales(id), FOREIGN KEY(medicine_id) REFERENCES medicines(id), FOREIGN KEY(batch_id) REFERENCES batches(id))")
-        cur.execute("CREATE TABLE IF NOT EXISTS sales_returns (id INTEGER PRIMARY KEY, original_sale_id INTEGER, sale_item_id INTEGER, quantity_returned INTEGER, refund_amount REAL, reason TEXT, created_by INTEGER, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(original_sale_id) REFERENCES sales(id), FOREIGN KEY(sale_item_id) REFERENCES sale_items(id))")
-        cur.execute("CREATE TABLE IF NOT EXISTS suppliers (id INTEGER PRIMARY KEY, name TEXT, contact_person TEXT, phone TEXT, email TEXT, address TEXT, gst_number TEXT, payment_terms TEXT, is_active INTEGER DEFAULT 1)")
-        # Purchase orders table with created_at
+        cur.execute("CREATE TABLE IF NOT EXISTS sales_returns (id INTEGER PRIMARY KEY, original_sale_id INTEGER, sale_item_id INTEGER, quantity_returned INTEGER, refund_amount REAL, reason TEXT, created_by INTEGER, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(original_sale_id) REFERENCES sales(id), FOREIGN KEY(sale_item_id) REFERENCES sale_items(id), FOREIGN KEY(created_by) REFERENCES users(id))")
         cur.execute("CREATE TABLE IF NOT EXISTS purchase_orders (id INTEGER PRIMARY KEY, po_number TEXT UNIQUE, supplier_id INTEGER, order_date DATE, expected_delivery DATE, total_amount REAL, status TEXT DEFAULT 'pending', created_by INTEGER, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(supplier_id) REFERENCES suppliers(id), FOREIGN KEY(created_by) REFERENCES users(id))")
         cur.execute("CREATE TABLE IF NOT EXISTS staff_attendance (id INTEGER PRIMARY KEY, user_id INTEGER, date DATE, check_in TIME, check_out TIME, status TEXT DEFAULT 'present', UNIQUE(user_id, date), FOREIGN KEY(user_id) REFERENCES users(id))")
         cur.execute("CREATE TABLE IF NOT EXISTS notifications (id INTEGER PRIMARY KEY, title TEXT, message TEXT, type TEXT, is_read INTEGER DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
@@ -93,9 +98,15 @@ def init_db():
         cur.execute("CREATE TABLE IF NOT EXISTS loyalty_points (id INTEGER PRIMARY KEY, patient_id INTEGER UNIQUE, points INTEGER DEFAULT 0, redeemed INTEGER DEFAULT 0, FOREIGN KEY(patient_id) REFERENCES patients(id))")
         cur.execute("CREATE TABLE IF NOT EXISTS appointments (id INTEGER PRIMARY KEY, patient_id INTEGER, appointment_date DATE, appointment_time TIME, purpose TEXT, status TEXT DEFAULT 'scheduled', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(patient_id) REFERENCES patients(id))")
         cur.execute("CREATE TABLE IF NOT EXISTS drug_interactions (id INTEGER PRIMARY KEY, medicine1_id INTEGER, medicine2_id INTEGER, severity TEXT, description TEXT, FOREIGN KEY(medicine1_id) REFERENCES medicines(id), FOREIGN KEY(medicine2_id) REFERENCES medicines(id))")
+        cur.execute("CREATE TABLE IF NOT EXISTS stocktakes (id INTEGER PRIMARY KEY, name TEXT, status TEXT DEFAULT 'prepared', prepared_by INTEGER, prepared_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, closed_by INTEGER, closed_at TIMESTAMP, FOREIGN KEY(prepared_by) REFERENCES users(id), FOREIGN KEY(closed_by) REFERENCES users(id))")
+        cur.execute("CREATE TABLE IF NOT EXISTS stocktake_items (id INTEGER PRIMARY KEY, stocktake_id INTEGER, medicine_id INTEGER, expected_quantity INTEGER, counted_quantity INTEGER, variance INTEGER, FOREIGN KEY(stocktake_id) REFERENCES stocktakes(id), FOREIGN KEY(medicine_id) REFERENCES medicines(id))")
+        cur.execute("CREATE TABLE IF NOT EXISTS system_settings (id INTEGER PRIMARY KEY, key TEXT UNIQUE, value TEXT, description TEXT)")
+        cur.execute("CREATE TABLE IF NOT EXISTS till_sessions (id INTEGER PRIMARY KEY, user_id INTEGER, opened_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, closed_at TIMESTAMP, opening_balance REAL DEFAULT 0, closing_balance REAL, cash_sales REAL DEFAULT 0, card_sales REAL DEFAULT 0, medical_aid_sales REAL DEFAULT 0, status TEXT DEFAULT 'open', FOREIGN KEY(user_id) REFERENCES users(id))")
+        cur.execute("CREATE TABLE IF NOT EXISTS quotations (id INTEGER PRIMARY KEY, quotation_no TEXT UNIQUE, patient_id INTEGER, items TEXT, total_amount REAL, valid_until DATE, created_by INTEGER, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(patient_id) REFERENCES patients(id), FOREIGN KEY(created_by) REFERENCES users(id))")
         cur.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
 
-        # Default roles
+        # ========== DEFAULT DATA ==========
+        # Roles
         roles = [
             ("Admin", '{"all":true}'),
             ("Manager", '{"medicines":true,"inventory":true,"suppliers":true,"reports":true,"staff":true,"audit":true}'),
@@ -105,16 +116,34 @@ def init_db():
         for name, perms in roles:
             cur.execute("INSERT OR IGNORE INTO roles (name, permissions) VALUES (?,?)", (name, perms))
 
+        # Admin user
         admin_role = cur.execute("SELECT id FROM roles WHERE name='Admin'").fetchone()
         admin_exists = cur.execute("SELECT id FROM users WHERE username='admin'").fetchone()
         if not admin_exists and admin_role:
             cur.execute("INSERT INTO users (username, password_hash, full_name, email, role_id, must_change_password) VALUES (?,?,?,?,?,1)",
                         ("admin", generate_password_hash(ADMIN_PASSWORD), "System Administrator", "admin@pharmacy.com", admin_role[0]))
 
+        # Default categories
         categories = ["Antibiotics","Analgesics","Antipyretics","Vitamins","Antihistamines","Dermatologicals"]
         for cat in categories:
             cur.execute("INSERT OR IGNORE INTO categories (name) VALUES (?)", (cat,))
 
+        # Default departments
+        default_depts = ["General", "Prescription", "OTC", "Medical Devices"]
+        for dept in default_depts:
+            cur.execute("INSERT OR IGNORE INTO departments (name) VALUES (?)", (dept,))
+
+        # Default drug forms
+        default_forms = ["Tablet", "Capsule", "Syrup", "Injection", "Cream", "Drops"]
+        for form in default_forms:
+            cur.execute("INSERT OR IGNORE INTO drug_forms (name) VALUES (?)", (form,))
+
+        # Default therapeutic classes
+        default_classes = [("Analgesics", "N02"), ("Antibiotics", "J01"), ("Antihypertensives", "C02")]
+        for name, code in default_classes:
+            cur.execute("INSERT OR IGNORE INTO therapeutic_classes (name, code) VALUES (?,?)", (name, code))
+
+        # Default settings
         default_settings = {
             "pharmacy_name": "HealthPlus Pharmacy",
             "pharmacy_address": "123 Main Street, City",
@@ -128,9 +157,10 @@ def init_db():
         }
         for key, val in default_settings.items():
             cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?,?)", (key, val))
+
         conn.commit()
 
-    # Ensure loyalty_points has UNIQUE constraint on patient_id
+    # Fix loyalty_points uniqueness
     with get_db_connection() as conn:
         cursor = conn.execute("PRAGMA index_list('loyalty_points')")
         indexes = [row['name'] for row in cursor.fetchall()]
@@ -500,10 +530,9 @@ def ai_response(q):
     return "I can help with medicine suggestions, stock status, expiring products, and more. Try 'fever', 'low stock', or 'expiring medicines'."
 
 # ==================== PAGE FUNCTIONS ====================
-# All page functions (render_dashboard, render_medicines, ...) are identical to the previous fully working version.
-# To keep the answer within limits, we include the full implementation here (they are all present in the final script).
-# The only change is in the purchase_orders query in render_advanced_features (now uses created_at correctly).
-# The rest of the page functions are exactly as in the last correct version.
+# We will implement each page function step by step.
+# Due to length, we'll include all necessary render_* functions.
+# All functions are based on the previous working versions, extended with new modules.
 
 def render_dashboard():
     require_permission("all")
@@ -554,7 +583,7 @@ def render_dashboard():
 def render_medicines():
     require_permission("medicines")
     st.title("💊 Medicines Management")
-    tab1, tab2, tab3 = st.tabs(["List", "Add/Edit", "Categories"])
+    tab1, tab2, tab3 = st.tabs(["List", "Add/Edit", "Categories", "Departments", "Manufacturers", "Drug Forms", "Therapeutic Classes"])
     with tab1:
         search = st.text_input("Search")
         page = st.number_input("Page", min_value=1, value=1, step=1)
@@ -564,18 +593,26 @@ def render_medicines():
             if search:
                 count = conn.execute("SELECT COUNT(*) FROM medicines WHERE name LIKE ? OR generic_name LIKE ?", (f"%{search}%", f"%{search}%")).fetchone()[0]
                 rows = conn.execute("""
-                    SELECT m.*, c.name as cat
+                    SELECT m.*, c.name as cat, d.name as dept, man.name as manu, df.name as form, tc.name as tclass
                     FROM medicines m
                     LEFT JOIN categories c ON m.category_id = c.id
+                    LEFT JOIN departments d ON m.department_id = d.id
+                    LEFT JOIN manufacturers man ON m.manufacturer_id = man.id
+                    LEFT JOIN drug_forms df ON m.drug_form_id = df.id
+                    LEFT JOIN therapeutic_classes tc ON m.therapeutic_class_id = tc.id
                     WHERE m.name LIKE ? OR m.generic_name LIKE ?
                     LIMIT ? OFFSET ?
                 """, (f"%{search}%", f"%{search}%", per, off)).fetchall()
             else:
                 count = conn.execute("SELECT COUNT(*) FROM medicines").fetchone()[0]
                 rows = conn.execute("""
-                    SELECT m.*, c.name as cat
+                    SELECT m.*, c.name as cat, d.name as dept, man.name as manu, df.name as form, tc.name as tclass
                     FROM medicines m
                     LEFT JOIN categories c ON m.category_id = c.id
+                    LEFT JOIN departments d ON m.department_id = d.id
+                    LEFT JOIN manufacturers man ON m.manufacturer_id = man.id
+                    LEFT JOIN drug_forms df ON m.drug_form_id = df.id
+                    LEFT JOIN therapeutic_classes tc ON m.therapeutic_class_id = tc.id
                     LIMIT ? OFFSET ?
                 """, (per, off)).fetchall()
         st.write(f"Total: {count}")
@@ -594,22 +631,33 @@ def render_medicines():
             if col4.button("🏷️", key=f"barcode_{r['id']}"):
                 img = generate_barcode(r['barcode'] or str(r['id']))
                 st.image(img, width=100)
+
     with tab2:
         med = st.session_state.get('edit_medicine', {})
+        # Fetch all lookup data
         with get_db_connection() as conn:
             cats = conn.execute("SELECT id, name FROM categories").fetchall()
+            depts = conn.execute("SELECT id, name FROM departments").fetchall()
+            mans = conn.execute("SELECT id, name FROM manufacturers").fetchall()
+            forms = conn.execute("SELECT id, name FROM drug_forms").fetchall()
+            tclasses = conn.execute("SELECT id, name FROM therapeutic_classes").fetchall()
+            supps = conn.execute("SELECT id, name FROM suppliers").fetchall()
         cat_opts = {c[0]: c[1] for c in cats}
+        dept_opts = {d[0]: d[1] for d in depts}
+        man_opts = {m[0]: m[1] for m in mans}
+        form_opts = {f[0]: f[1] for f in forms}
+        tc_opts = {tc[0]: tc[1] for tc in tclasses}
+        supp_opts = {s[0]: s[1] for s in supps}
+
         name = st.text_input("Medicine Name", med.get('name', ''))
         generic = st.text_input("Generic Name", med.get('generic_name', ''))
-        cat_idx = 0
-        if med:
-            for i, c in enumerate(cats):
-                if c[0] == med.get('category_id'):
-                    cat_idx = i
-                    break
-        category = st.selectbox("Category", list(cat_opts.keys()), format_func=lambda x: cat_opts[x], index=cat_idx)
+        category = st.selectbox("Category", list(cat_opts.keys()), format_func=lambda x: cat_opts[x], index=0 if not med else next((i for i,c in enumerate(cats) if c[0]==med.get('category_id')),0))
+        department = st.selectbox("Department", list(dept_opts.keys()), format_func=lambda x: dept_opts[x], index=0 if not med else next((i for i,d in enumerate(depts) if d[0]==med.get('department_id')),0))
+        manufacturer = st.selectbox("Manufacturer", list(man_opts.keys()), format_func=lambda x: man_opts[x], index=0 if not med else next((i for i,m in enumerate(mans) if m[0]==med.get('manufacturer_id')),0))
+        drug_form = st.selectbox("Drug Form", list(form_opts.keys()), format_func=lambda x: form_opts[x], index=0 if not med else next((i for i,f in enumerate(forms) if f[0]==med.get('drug_form_id')),0))
+        therapeutic_class = st.selectbox("Therapeutic Class", list(tc_opts.keys()), format_func=lambda x: tc_opts[x], index=0 if not med else next((i for i,tc in enumerate(tclasses) if tc[0]==med.get('therapeutic_class_id')),0))
         bcode = st.text_input("Barcode", med.get('barcode', ''))
-        manuf = st.text_input("Manufacturer", med.get('manufacturer', ''))
+        supplier = st.selectbox("Supplier", list(supp_opts.keys()), format_func=lambda x: supp_opts[x], index=0 if not med else next((i for i,s in enumerate(supps) if s[0]==med.get('supplier_id')),0))
         price = st.number_input("Unit Price ($)", min_value=0.0, value=float(med.get('unit_price', 0)))
         reorder = st.number_input("Reorder Level", min_value=0, value=int(med.get('reorder_level', 10)))
         stock = st.number_input("Current Stock", min_value=0, value=int(med.get('current_stock', 0)))
@@ -619,23 +667,26 @@ def render_medicines():
                 if 'edit_medicine' in st.session_state:
                     conn.execute("""
                         UPDATE medicines
-                        SET name=?, generic_name=?, category_id=?, barcode=?, manufacturer=?,
+                        SET name=?, generic_name=?, category_id=?, department_id=?, manufacturer_id=?,
+                            drug_form_id=?, therapeutic_class_id=?, barcode=?, supplier_id=?,
                             unit_price=?, reorder_level=?, current_stock=?, description=?
                         WHERE id=?
-                    """, (name, generic, category, bcode, manuf, price, reorder, stock, desc, med['id']))
+                    """, (name, generic, category, department, manufacturer, drug_form, therapeutic_class, bcode, supplier, price, reorder, stock, desc, med['id']))
                     del st.session_state.edit_medicine
                     st.success("Medicine updated successfully")
                 else:
                     conn.execute("""
-                        INSERT INTO medicines (name, generic_name, category_id, barcode, manufacturer,
+                        INSERT INTO medicines (name, generic_name, category_id, department_id, manufacturer_id,
+                                              drug_form_id, therapeutic_class_id, barcode, supplier_id,
                                               unit_price, reorder_level, current_stock, description)
-                        VALUES (?,?,?,?,?,?,?,?,?)
-                    """, (name, generic, category, bcode, manuf, price, reorder, stock, desc))
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    """, (name, generic, category, department, manufacturer, drug_form, therapeutic_class, bcode, supplier, price, reorder, stock, desc))
                     st.success("Medicine added successfully")
                 conn.commit()
             st.rerun()
+
     with tab3:
-        st.subheader("Manage Categories")
+        st.subheader("Categories")
         new_cat = st.text_input("New Category Name")
         if st.button("Add Category") and new_cat:
             with get_db_connection() as conn:
@@ -654,10 +705,93 @@ def render_medicines():
                     st.success("Category deleted")
                     st.rerun()
 
+    with tab4:
+        st.subheader("Departments")
+        new_dept = st.text_input("New Department Name")
+        if st.button("Add Department") and new_dept:
+            with get_db_connection() as conn:
+                conn.execute("INSERT OR IGNORE INTO departments (name) VALUES (?)", (new_dept,))
+                conn.commit()
+            st.success(f"Department '{new_dept}' added")
+            st.rerun()
+        with get_db_connection() as conn:
+            depts = conn.execute("SELECT id, name FROM departments").fetchall()
+            for d in depts:
+                col1, col2 = st.columns([3,1])
+                col1.write(d[1])
+                if col2.button("Delete", key=f"deldept_{d[0]}"):
+                    conn.execute("DELETE FROM departments WHERE id=?", (d[0],))
+                    conn.commit()
+                    st.success("Department deleted")
+                    st.rerun()
+
+    with tab5:
+        st.subheader("Manufacturers")
+        new_man = st.text_input("New Manufacturer Name")
+        contact = st.text_input("Contact Person")
+        phone = st.text_input("Phone")
+        email = st.text_input("Email")
+        if st.button("Add Manufacturer") and new_man:
+            with get_db_connection() as conn:
+                conn.execute("INSERT INTO manufacturers (name, contact_person, phone, email) VALUES (?,?,?,?)", (new_man, contact, phone, email))
+                conn.commit()
+            st.success(f"Manufacturer '{new_man}' added")
+            st.rerun()
+        with get_db_connection() as conn:
+            mans = conn.execute("SELECT id, name, contact_person, phone, email FROM manufacturers").fetchall()
+            for m in mans:
+                with st.expander(f"{m[1]}"):
+                    st.write(f"Contact: {m[2]}, Phone: {m[3]}, Email: {m[4]}")
+                    if st.button("Delete", key=f"delman_{m[0]}"):
+                        conn.execute("DELETE FROM manufacturers WHERE id=?", (m[0],))
+                        conn.commit()
+                        st.rerun()
+
+    with tab6:
+        st.subheader("Drug Forms")
+        new_form = st.text_input("New Drug Form")
+        if st.button("Add Drug Form") and new_form:
+            with get_db_connection() as conn:
+                conn.execute("INSERT OR IGNORE INTO drug_forms (name) VALUES (?)", (new_form,))
+                conn.commit()
+            st.success(f"Drug form '{new_form}' added")
+            st.rerun()
+        with get_db_connection() as conn:
+            forms = conn.execute("SELECT id, name FROM drug_forms").fetchall()
+            for f in forms:
+                col1, col2 = st.columns([3,1])
+                col1.write(f[1])
+                if col2.button("Delete", key=f"delform_{f[0]}"):
+                    conn.execute("DELETE FROM drug_forms WHERE id=?", (f[0],))
+                    conn.commit()
+                    st.success("Drug form deleted")
+                    st.rerun()
+
+    with tab7:
+        st.subheader("Therapeutic Classes")
+        new_tc = st.text_input("New Therapeutic Class")
+        code = st.text_input("Code")
+        if st.button("Add Therapeutic Class") and new_tc:
+            with get_db_connection() as conn:
+                conn.execute("INSERT INTO therapeutic_classes (name, code) VALUES (?,?)", (new_tc, code))
+                conn.commit()
+            st.success(f"Therapeutic class '{new_tc}' added")
+            st.rerun()
+        with get_db_connection() as conn:
+            tcs = conn.execute("SELECT id, name, code FROM therapeutic_classes").fetchall()
+            for tc in tcs:
+                col1, col2 = st.columns([3,1])
+                col1.write(f"{tc[1]} ({tc[2]})")
+                if col2.button("Delete", key=f"deltc_{tc[0]}"):
+                    conn.execute("DELETE FROM therapeutic_classes WHERE id=?", (tc[0],))
+                    conn.commit()
+                    st.success("Therapeutic class deleted")
+                    st.rerun()
+
 def render_inventory():
     require_permission("inventory")
     st.title("📦 Inventory Management")
-    tab1, tab2 = st.tabs(["Stock In/Out", "Batches"])
+    tab1, tab2, tab3 = st.tabs(["Stock In/Out", "Batches", "Breakages", "Expired Drugs", "Out of Stock", "Price Change"])
     with tab1:
         with get_db_connection() as conn:
             meds = conn.execute("SELECT id, name FROM medicines").fetchall()
@@ -709,6 +843,169 @@ def render_inventory():
             df = pd.DataFrame([dict(r) for r in batches])
             st.dataframe(df[['medicine_name','batch_number','quantity','expiry_date','purchase_price','selling_price']])
 
+    with tab3:
+        st.subheader("Record Breakage")
+        with get_db_connection() as conn:
+            meds = conn.execute("SELECT id, name FROM medicines").fetchall()
+        med_opts = {m[0]: m[1] for m in meds}
+        med_id = st.selectbox("Medicine", list(med_opts.keys()), format_func=lambda x: med_opts[x])
+        with get_db_connection() as conn:
+            batches = conn.execute("SELECT id, batch_number, quantity FROM batches WHERE medicine_id=? AND quantity>0", (med_id,)).fetchall()
+        batch_opts = {b[0]: f"{b[1]} (Stock: {b[2]})" for b in batches}
+        if not batch_opts:
+            st.warning("No batches available for this medicine.")
+            return
+        batch_id = st.selectbox("Batch", list(batch_opts.keys()), format_func=lambda x: batch_opts[x])
+        qty_break = st.number_input("Quantity to break", min_value=1, step=1)
+        reason = st.text_input("Reason")
+        if st.button("Record Breakage"):
+            with get_db_connection() as conn:
+                batch = conn.execute("SELECT quantity FROM batches WHERE id=?", (batch_id,)).fetchone()
+                if batch[0] >= qty_break:
+                    conn.execute("UPDATE batches SET quantity = quantity - ? WHERE id=?", (qty_break, batch_id))
+                    conn.execute("UPDATE medicines SET current_stock = current_stock - ? WHERE id=?", (qty_break, med_id))
+                    conn.execute("INSERT INTO inventory_transactions (medicine_id, batch_id, transaction_type, quantity, notes) VALUES (?,?,'BREAKAGE',?,?)", (med_id, batch_id, -qty_break, reason))
+                    conn.commit()
+                    st.success("Breakage recorded")
+                    st.rerun()
+                else:
+                    st.error("Insufficient batch quantity")
+
+    with tab4:
+        st.subheader("Expired Drugs")
+        with get_db_connection() as conn:
+            expired = conn.execute("""
+                SELECT b.id, m.name, b.batch_number, b.expiry_date, b.quantity
+                FROM batches b JOIN medicines m ON b.medicine_id = m.id
+                WHERE b.expiry_date < date('now')
+            """).fetchall()
+        if expired:
+            df = pd.DataFrame([dict(r) for r in expired])
+            st.dataframe(df)
+            if st.button("Remove Expired Batches"):
+                with get_db_connection() as conn:
+                    conn.execute("DELETE FROM batches WHERE expiry_date < date('now')")
+                    conn.commit()
+                st.success("Expired batches removed")
+                st.rerun()
+        else:
+            st.info("No expired drugs found")
+
+    with tab5:
+        st.subheader("Out of Stock Medicines")
+        with get_db_connection() as conn:
+            oos = conn.execute("SELECT id, name, current_stock FROM medicines WHERE current_stock <= 0").fetchall()
+        if oos:
+            df = pd.DataFrame([dict(r) for r in oos])
+            st.dataframe(df)
+        else:
+            st.info("All medicines are in stock")
+
+    with tab6:
+        st.subheader("Price Change")
+        with get_db_connection() as conn:
+            meds = conn.execute("SELECT id, name, unit_price FROM medicines").fetchall()
+        med_opts = {m[0]: f"{m[1]} (Current: ${m[2]:.2f})" for m in meds}
+        med_id = st.selectbox("Select Medicine", list(med_opts.keys()), format_func=lambda x: med_opts[x])
+        new_price = st.number_input("New Price ($)", min_value=0.0, step=0.01)
+        if st.button("Update Price"):
+            with get_db_connection() as conn:
+                conn.execute("UPDATE medicines SET unit_price = ? WHERE id = ?", (new_price, med_id))
+                conn.commit()
+            st.success("Price updated successfully")
+            st.rerun()
+
+def render_stocktake():
+    require_permission("inventory")
+    st.title("📋 Stocktake Management")
+    tab1, tab2, tab3, tab4 = st.tabs(["Prepare", "Capture Counts", "Close Stocktake", "Cycle Count"])
+    with tab1:
+        st.subheader("Prepare New Stocktake")
+        name = st.text_input("Stocktake Name")
+        if st.button("Prepare Stocktake"):
+            if name:
+                with get_db_connection() as conn:
+                    conn.execute("INSERT INTO stocktakes (name, prepared_by, status) VALUES (?, ?, 'prepared')", (name, st.session_state.user['id']))
+                    stocktake_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+                    medicines = conn.execute("SELECT id, current_stock FROM medicines").fetchall()
+                    for med in medicines:
+                        conn.execute("INSERT INTO stocktake_items (stocktake_id, medicine_id, expected_quantity, counted_quantity) VALUES (?,?,?,0)", (stocktake_id, med[0], med[1]))
+                    conn.commit()
+                st.success(f"Stocktake '{name}' prepared")
+                st.rerun()
+            else:
+                st.error("Please enter a name")
+        with get_db_connection() as conn:
+            stocktakes = conn.execute("SELECT id, name, status, prepared_at FROM stocktakes WHERE status='prepared' ORDER BY prepared_at DESC").fetchall()
+        if stocktakes:
+            st.subheader("Open Stocktakes")
+            for stk in stocktakes:
+                st.write(f"{stk[1]} - Prepared: {stk[3]} - Status: {stk[2]}")
+                if st.button(f"Capture Counts", key=f"capture_{stk[0]}"):
+                    st.session_state.stocktake_id = stk[0]
+                    st.rerun()
+    with tab2:
+        if 'stocktake_id' not in st.session_state:
+            st.info("Please prepare or select a stocktake first")
+        else:
+            stocktake_id = st.session_state.stocktake_id
+            with get_db_connection() as conn:
+                items = conn.execute("""
+                    SELECT si.id, m.name, si.expected_quantity, si.counted_quantity
+                    FROM stocktake_items si JOIN medicines m ON si.medicine_id = m.id
+                    WHERE si.stocktake_id = ?
+                """, (stocktake_id,)).fetchall()
+            st.write(f"Stocktake ID: {stocktake_id}")
+            for item in items:
+                col1, col2, col3 = st.columns([3,1,1])
+                col1.write(item[1])
+                col2.write(f"Expected: {item[2]}")
+                new_count = col3.number_input("Counted", value=item[3], key=f"count_{item[0]}")
+                with get_db_connection() as conn2:
+                    conn2.execute("UPDATE stocktake_items SET counted_quantity = ? WHERE id = ?", (new_count, item[0]))
+                    conn2.commit()
+            if st.button("Save All Counts"):
+                with get_db_connection() as conn:
+                    conn.execute("UPDATE stocktake_items SET variance = counted_quantity - expected_quantity WHERE stocktake_id = ?", (stocktake_id,))
+                    conn.commit()
+                st.success("Counts saved. You can now close the stocktake.")
+    with tab3:
+        st.subheader("Close Stocktake")
+        with get_db_connection() as conn:
+            stocktakes = conn.execute("SELECT id, name FROM stocktakes WHERE status='prepared'").fetchall()
+        if stocktakes:
+            stk_opts = {s[0]: s[1] for s in stocktakes}
+            stk_id = st.selectbox("Select Stocktake to Close", list(stk_opts.keys()), format_func=lambda x: stk_opts[x])
+            if st.button("Close and Apply Variances"):
+                with get_db_connection() as conn:
+                    items = conn.execute("SELECT medicine_id, variance FROM stocktake_items WHERE stocktake_id=?", (stk_id,)).fetchall()
+                    for it in items:
+                        if it[1] != 0:
+                            conn.execute("UPDATE medicines SET current_stock = current_stock + ? WHERE id = ?", (it[1], it[0]))
+                            conn.execute("INSERT INTO inventory_transactions (medicine_id, transaction_type, quantity, notes, created_by) VALUES (?, 'ADJUST', ?, ?, ?)", (it[0], it[1], f"Stocktake adjustment", st.session_state.user['id']))
+                    conn.execute("UPDATE stocktakes SET status='closed', closed_by=?, closed_at=CURRENT_TIMESTAMP WHERE id=?", (st.session_state.user['id'], stk_id))
+                    conn.commit()
+                st.success("Stocktake closed and variances applied")
+                st.rerun()
+        else:
+            st.info("No open stocktakes")
+    with tab4:
+        st.subheader("Cycle Count")
+        with get_db_connection() as conn:
+            medicines = conn.execute("SELECT id, name FROM medicines").fetchall()
+        med_opts = {m[0]: m[1] for m in medicines}
+        med_id = st.selectbox("Select Medicine", list(med_opts.keys()), format_func=lambda x: med_opts[x])
+        counted_qty = st.number_input("Counted Quantity", min_value=0, step=1)
+        if st.button("Update Cycle Count"):
+            with get_db_connection() as conn:
+                old_stock = conn.execute("SELECT current_stock FROM medicines WHERE id=?", (med_id,)).fetchone()[0]
+                variance = counted_qty - old_stock
+                conn.execute("UPDATE medicines SET current_stock = ? WHERE id=?", (counted_qty, med_id))
+                conn.execute("INSERT INTO inventory_transactions (medicine_id, transaction_type, quantity, notes, created_by) VALUES (?, 'CYCLE_COUNT', ?, ?, ?)", (med_id, variance, f"Cycle count: expected {old_stock}, counted {counted_qty}", st.session_state.user['id']))
+                conn.commit()
+            st.success(f"Stock updated to {counted_qty}")
+            st.rerun()
+
 def render_patients():
     require_permission("patients_view")
     st.title("👥 Patient Management")
@@ -718,17 +1015,24 @@ def render_patients():
         with get_db_connection() as conn:
             if search:
                 rows = conn.execute("""
-                    SELECT * FROM patients
-                    WHERE first_name LIKE ? OR last_name LIKE ? OR patient_id LIKE ? OR phone LIKE ?
+                    SELECT p.*, m.name as medical_aid_name
+                    FROM patients p
+                    LEFT JOIN medical_aids m ON p.medical_aid_id = m.id
+                    WHERE p.first_name LIKE ? OR p.last_name LIKE ? OR p.patient_id LIKE ? OR p.phone LIKE ?
                 """, (f"%{search}%", f"%{search}%", f"%{search}%", f"%{search}%")).fetchall()
             else:
-                rows = conn.execute("SELECT * FROM patients LIMIT 50").fetchall()
+                rows = conn.execute("""
+                    SELECT p.*, m.name as medical_aid_name
+                    FROM patients p
+                    LEFT JOIN medical_aids m ON p.medical_aid_id = m.id
+                    LIMIT 50
+                """).fetchall()
         for r in rows:
             with st.expander(f"{r['first_name']} {r['last_name']} (ID: {r['patient_id']})"):
                 col1, col2 = st.columns(2)
                 col1.write(f"📞 Phone: {r['phone']}")
                 col1.write(f"📧 Email: {r['email']}")
-                col1.write(f"🏥 Insurance: {r['insurance_provider']} - {r['insurance_number']}")
+                col1.write(f"🏥 Medical Aid: {r['medical_aid_name']} - {r['medical_aid_number']}")
                 col2.write(f"🩸 Blood Group: {r['blood_group']}")
                 col2.write(f"⚠️ Allergies: {r['allergies'] or 'None'}")
                 col2.write(f"📅 DOB: {r['date_of_birth']}")
@@ -744,8 +1048,11 @@ def render_patients():
             email = st.text_input("Email")
         with col2:
             address = st.text_area("Address")
-            insurance_provider = st.text_input("Insurance Provider")
-            insurance_number = st.text_input("Insurance Number")
+            with get_db_connection() as conn:
+                aids = conn.execute("SELECT id, name FROM medical_aids").fetchall()
+            aid_opts = {a[0]: a[1] for a in aids}
+            aid_id = st.selectbox("Medical Aid Society", list(aid_opts.keys()), format_func=lambda x: aid_opts[x])
+            aid_number = st.text_input("Medical Aid Number")
             blood_group = st.selectbox("Blood Group", ["A+","A-","B+","B-","O+","O-","AB+","AB-"])
             allergies = st.text_area("Allergies")
         if st.button("Register Patient"):
@@ -754,19 +1061,51 @@ def render_patients():
                 with get_db_connection() as conn:
                     conn.execute("""
                         INSERT INTO patients (patient_id, first_name, last_name, date_of_birth, gender, phone, email,
-                                              address, insurance_provider, insurance_number, blood_group, allergies)
+                                              address, medical_aid_id, medical_aid_number, blood_group, allergies)
                         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-                    """, (pid, first, last, dob, gender, phone, email, address, insurance_provider, insurance_number, blood_group, allergies))
+                    """, (pid, first, last, dob, gender, phone, email, address, aid_id, aid_number, blood_group, allergies))
                     conn.commit()
                 st.success(f"Patient registered with ID: {pid}")
                 st.rerun()
             else:
                 st.error("First and last name are required")
 
+def render_medical_aid_societies():
+    require_permission("patients_view")
+    st.title("🏥 Medical Aid Societies")
+    tab1, tab2 = st.tabs(["List", "Add/Edit"])
+    with tab1:
+        with get_db_connection() as conn:
+            aids = conn.execute("SELECT * FROM medical_aids").fetchall()
+        for a in aids:
+            with st.expander(f"{a['name']} ({a['code']})"):
+                st.write(f"Contact: {a['contact_person']}, Phone: {a['phone']}, Email: {a['email']}")
+                st.write(f"Address: {a['address']}")
+    with tab2:
+        st.subheader("Add New Medical Aid")
+        name = st.text_input("Name")
+        code = st.text_input("Code")
+        contact = st.text_input("Contact Person")
+        phone = st.text_input("Phone")
+        email = st.text_input("Email")
+        address = st.text_area("Address")
+        if st.button("Add Medical Aid"):
+            if name:
+                with get_db_connection() as conn:
+                    conn.execute("""
+                        INSERT INTO medical_aids (name, code, contact_person, phone, email, address)
+                        VALUES (?,?,?,?,?,?)
+                    """, (name, code, contact, phone, email, address))
+                    conn.commit()
+                st.success("Medical aid added")
+                st.rerun()
+            else:
+                st.error("Name required")
+
 def render_prescriptions():
     require_permission("prescriptions")
     st.title("📋 Prescription Management")
-    tab1, tab2 = st.tabs(["Pending Prescriptions", "New Prescription"])
+    tab1, tab2 = st.tabs(["Pending Prescriptions", "New Prescription", "Script Maintenance"])
     with tab1:
         with get_db_connection() as conn:
             pending = conn.execute("""
@@ -879,6 +1218,51 @@ def render_prescriptions():
                 st.session_state.pres_items = []
                 st.success(f"Prescription {pres_num} created")
                 st.rerun()
+    with tab3:
+        st.subheader("Script Maintenance")
+        with get_db_connection() as conn:
+            scripts = conn.execute("""
+                SELECT p.id, p.prescription_number, pat.first_name, pat.last_name, p.date, p.status
+                FROM prescriptions p
+                JOIN patients pat ON p.patient_id = pat.id
+                ORDER BY p.date DESC
+            """).fetchall()
+        if scripts:
+            df = pd.DataFrame([dict(r) for r in scripts])
+            st.dataframe(df)
+            for r in scripts:
+                if st.button(f"Reprint Script #{r['prescription_number']}", key=f"reprint_{r['id']}"):
+                    with get_db_connection() as conn2:
+                        items = conn2.execute("""
+                            SELECT pi.*, m.name
+                            FROM prescription_items pi JOIN medicines m ON pi.medicine_id=m.id
+                            WHERE pi.prescription_id = ?
+                        """, (r['id'],)).fetchall()
+                    # Generate PDF
+                    pdf = FPDF()
+                    pdf.add_page()
+                    pdf.set_font("Arial", "B", 16)
+                    pdf.cell(200, 10, "Prescription", ln=1, align='C')
+                    pdf.set_font("Arial", "", 12)
+                    pdf.cell(200, 10, f"Number: {r['prescription_number']}", ln=1)
+                    pdf.cell(200, 10, f"Patient: {r['first_name']} {r['last_name']}", ln=1)
+                    pdf.cell(200, 10, f"Date: {r['date']}", ln=1)
+                    pdf.ln(10)
+                    pdf.set_font("Arial", "B", 10)
+                    pdf.cell(80, 10, "Medicine", 1)
+                    pdf.cell(30, 10, "Qty", 1)
+                    pdf.cell(50, 10, "Dosage", 1)
+                    pdf.cell(40, 10, "Instructions", 1)
+                    pdf.ln()
+                    pdf.set_font("Arial", "", 10)
+                    for it in items:
+                        pdf.cell(80, 10, it['name'][:30], 1)
+                        pdf.cell(30, 10, str(it['quantity']), 1)
+                        pdf.cell(50, 10, it['dosage'][:20], 1)
+                        pdf.cell(40, 10, it['instructions'][:20], 1)
+                        pdf.ln()
+                    pdf_bytes = pdf.output(dest='S').encode('latin1')
+                    st.download_button(f"Download PDF", data=pdf_bytes, file_name=f"prescription_{r['prescription_number']}.pdf", mime="application/pdf")
 
 def render_sales_billing():
     require_permission("sales")
@@ -925,7 +1309,8 @@ def render_sales_billing():
             st.write(f"**Tax (GST {gst_rate}%): ${tax:.2f}**")
             st.write(f"**Net Amount: ${net:.2f}**")
             patient_search = st.text_input("Patient ID (optional)")
-            payment_method = st.selectbox("Payment Method", ["Cash", "Card", "Insurance", "UPI"])
+            payment_method = st.selectbox("Payment Method", ["Cash", "Card", "Medical Aid", "UPI"])
+            medical_aid_claim = payment_method == "Medical Aid"
             if st.button("Complete Sale"):
                 with get_db_connection() as conn:
                     patient_id = None
@@ -1063,41 +1448,50 @@ def render_label_printing():
 def render_suppliers():
     require_permission("suppliers")
     st.title("🚚 Supplier Management")
-    with get_db_connection() as conn:
-        sups = conn.execute("SELECT * FROM suppliers").fetchall()
-    for s in sups:
-        with st.expander(f"{s['name']} - {s.get('contact_person', '')}"):
-            col1, col2 = st.columns(2)
-            col1.write(f"📞 {s['phone']}")
-            col1.write(f"📧 {s['email']}")
-            col2.write(f"GST: {s['gst_number']}")
-            col2.write(f"Terms: {s['payment_terms']}")
-    st.subheader("Add New Supplier")
-    with st.form("add_supplier"):
-        name = st.text_input("Supplier Name")
-        contact = st.text_input("Contact Person")
-        phone = st.text_input("Phone")
-        email = st.text_input("Email")
-        address = st.text_area("Address")
-        gst = st.text_input("GST Number")
-        terms = st.text_input("Payment Terms")
-        if st.form_submit_button("Add Supplier"):
-            if name:
-                with get_db_connection() as conn:
-                    conn.execute("""
-                        INSERT INTO suppliers (name, contact_person, phone, email, address, gst_number, payment_terms)
-                        VALUES (?,?,?,?,?,?,?)
-                    """, (name, contact, phone, email, address, gst, terms))
-                    conn.commit()
-                st.success(f"Supplier '{name}' added")
-                st.rerun()
-            else:
-                st.error("Supplier name is required")
+    tab1, tab2 = st.tabs(["Suppliers", "Purchase Orders"])
+    with tab1:
+        with get_db_connection() as conn:
+            sups = conn.execute("SELECT * FROM suppliers").fetchall()
+        for s in sups:
+            with st.expander(f"{s['name']} - {s.get('contact_person', '')}"):
+                col1, col2 = st.columns(2)
+                col1.write(f"📞 {s['phone']}")
+                col1.write(f"📧 {s['email']}")
+                col2.write(f"GST: {s['gst_number']}")
+                col2.write(f"Terms: {s['payment_terms']}")
+        st.subheader("Add New Supplier")
+        with st.form("add_supplier"):
+            name = st.text_input("Supplier Name")
+            contact = st.text_input("Contact Person")
+            phone = st.text_input("Phone")
+            email = st.text_input("Email")
+            address = st.text_area("Address")
+            gst = st.text_input("GST Number")
+            terms = st.text_input("Payment Terms")
+            if st.form_submit_button("Add Supplier"):
+                if name:
+                    with get_db_connection() as conn:
+                        conn.execute("""
+                            INSERT INTO suppliers (name, contact_person, phone, email, address, gst_number, payment_terms)
+                            VALUES (?,?,?,?,?,?,?)
+                        """, (name, contact, phone, email, address, gst, terms))
+                        conn.commit()
+                    st.success(f"Supplier '{name}' added")
+                    st.rerun()
+                else:
+                    st.error("Supplier name is required")
+    with tab2:
+        st.subheader("Purchase Orders")
+        with get_db_connection() as conn:
+            pos = conn.execute("SELECT * FROM purchase_orders ORDER BY created_at DESC LIMIT 50").fetchall()
+        if pos:
+            df = pd.DataFrame([dict(r) for r in pos])
+            st.dataframe(df)
 
 def render_reports():
     require_permission("reports")
     st.title("📊 Reports")
-    report_type = st.selectbox("Select Report", ["Daily Sales", "Monthly Sales", "Inventory Report", "Expiry Report", "Profit Report"])
+    report_type = st.selectbox("Select Report", ["Daily Sales", "Monthly Sales", "Inventory Report", "Expiry Report", "Profit Report", "Medical Aid Report", "Trading Report"])
     if report_type == "Daily Sales":
         date_sel = st.date_input("Select Date", datetime.now().date())
         with get_db_connection() as conn:
@@ -1159,6 +1553,31 @@ def render_reports():
             df = pd.DataFrame([{"month": r[0], "sales": r[1]} for r in rows])
             fig = px.line(df, x='month', y='sales', title='Monthly Sales Trend (Last 6 Months)')
             st.plotly_chart(fig)
+    elif report_type == "Medical Aid Report":
+        with get_db_connection() as conn:
+            rows = conn.execute("""
+                SELECT ma.name as medical_aid, SUM(s.net_amount) as total
+                FROM sales s
+                LEFT JOIN patients p ON s.patient_id = p.id
+                LEFT JOIN medical_aids ma ON p.medical_aid_id = ma.id
+                WHERE s.payment_method = 'Medical Aid'
+                GROUP BY ma.name
+            """).fetchall()
+        if rows:
+            df = pd.DataFrame([dict(r) for r in rows])
+            st.dataframe(df)
+            fig = px.pie(df, values='total', names='medical_aid', title='Medical Aid Claims')
+            st.plotly_chart(fig)
+    elif report_type == "Trading Report":
+        with get_db_connection() as conn:
+            total_sales = conn.execute("SELECT COALESCE(SUM(net_amount),0) FROM sales").fetchone()[0]
+            total_cost = conn.execute("SELECT COALESCE(SUM(purchase_price * quantity),0) FROM sale_items si JOIN batches b ON si.batch_id=b.id").fetchone()[0]
+        profit = total_sales - total_cost
+        margin = (profit / total_sales * 100) if total_sales > 0 else 0
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Total Sales", f"${total_sales:,.2f}")
+        col2.metric("Cost of Sales", f"${total_cost:,.2f}")
+        col3.metric("Gross Profit", f"${profit:,.2f} ({margin:.1f}%)")
 
 def render_staff_management():
     require_permission("staff")
@@ -1372,7 +1791,6 @@ def render_advanced_features():
             else:
                 st.info("No low-stock items requiring purchase orders.")
         with get_db_connection() as conn:
-            # Fixed: use created_at column which now exists
             pos = conn.execute("SELECT * FROM purchase_orders WHERE po_number LIKE 'POAUTO%' ORDER BY created_at DESC LIMIT 20").fetchall()
         if pos:
             st.subheader("Recent Auto‑Generated POs")
@@ -1451,6 +1869,197 @@ def render_settings():
             st.error(f"Invalid backup file: {e}")
             os.unlink(temp_path)
 
+def render_printer_setup():
+    require_permission("all")
+    st.title("🖨️ Printer Setup")
+    st.info("Configure default printers for receipts, labels, and prescriptions.")
+    receipt_printer = st.text_input("Receipt Printer Name", value="Default Printer")
+    label_printer = st.text_input("Label Printer Name", value="Default Label Printer")
+    if st.button("Save Printer Settings"):
+        update_setting("receipt_printer", receipt_printer)
+        update_setting("label_printer", label_printer)
+        st.success("Printer settings saved")
+
+def render_calculator():
+    require_permission("all")
+    st.title("🧮 Calculator")
+    st.markdown("""
+    <style>
+    .calc-btn { width: 100%; margin: 2px; }
+    </style>
+    """, unsafe_allow_html=True)
+    if 'calc_expr' not in st.session_state:
+        st.session_state.calc_expr = ""
+    display = st.text_input("", value=st.session_state.calc_expr, key="calc_display")
+    cols = [
+        ["7","8","9","/"],
+        ["4","5","6","*"],
+        ["1","2","3","-"],
+        ["0",".","=","+"],
+        ["C"]
+    ]
+    for row in cols:
+        btns = st.columns(len(row))
+        for i, btn in enumerate(row):
+            if btns[i].button(btn, key=f"calc_{btn}"):
+                if btn == "=":
+                    try:
+                        result = eval(st.session_state.calc_expr)
+                        st.session_state.calc_expr = str(result)
+                    except:
+                        st.session_state.calc_expr = "Error"
+                elif btn == "C":
+                    st.session_state.calc_expr = ""
+                else:
+                    st.session_state.calc_expr += btn
+                st.rerun()
+    st.write("Result: ", st.session_state.calc_expr)
+
+def render_tariffs():
+    require_permission("all")
+    st.title("💰 Tariffs")
+    st.info("Manage dispensing fees, markups, and medical aid tariffs.")
+    dispensing_fee = st.number_input("Dispensing Fee ($)", min_value=0.0, value=5.0)
+    markup_percent = st.number_input("Markup %", min_value=0.0, value=25.0)
+    if st.button("Save Tariffs"):
+        update_setting("dispensing_fee", str(dispensing_fee))
+        update_setting("markup_percent", str(markup_percent))
+        st.success("Tariffs saved")
+
+def render_merge_patients():
+    require_permission("patients_view")
+    st.title("🔗 Merge Patient Files")
+    with get_db_connection() as conn:
+        patients = conn.execute("SELECT id, patient_id, first_name, last_name FROM patients").fetchall()
+    pat_opts = {p[0]: f"{p[2]} {p[3]} ({p[1]})" for p in patients}
+    source_id = st.selectbox("Source Patient (to merge FROM)", list(pat_opts.keys()), format_func=lambda x: pat_opts[x])
+    target_id = st.selectbox("Target Patient (to merge INTO)", list(pat_opts.keys()), format_func=lambda x: pat_opts[x])
+    if st.button("Merge Patients"):
+        if source_id == target_id:
+            st.error("Cannot merge a patient with itself")
+        else:
+            with get_db_connection() as conn:
+                # Update prescriptions
+                conn.execute("UPDATE prescriptions SET patient_id = ? WHERE patient_id = ?", (target_id, source_id))
+                # Update sales
+                conn.execute("UPDATE sales SET patient_id = ? WHERE patient_id = ?", (target_id, source_id))
+                # Update loyalty points
+                conn.execute("UPDATE loyalty_points SET patient_id = ? WHERE patient_id = ?", (target_id, source_id))
+                # Delete source patient
+                conn.execute("DELETE FROM patients WHERE id = ?", (source_id,))
+                conn.commit()
+            st.success("Patients merged successfully")
+            st.rerun()
+
+def render_quotation():
+    require_permission("sales")
+    st.title("📄 Quotation")
+    with get_db_connection() as conn:
+        patients = conn.execute("SELECT id, patient_id, first_name, last_name FROM patients").fetchall()
+    pat_opts = {p[0]: f"{p[2]} {p[3]} ({p[1]})" for p in patients}
+    patient_id = st.selectbox("Patient", list(pat_opts.keys()), format_func=lambda x: pat_opts[x])
+    st.subheader("Add Items")
+    if 'quotation_items' not in st.session_state:
+        st.session_state.quotation_items = []
+    with get_db_connection() as conn:
+        medicines = conn.execute("SELECT id, name, unit_price FROM medicines").fetchall()
+    med_opts = {m[0]: f"{m[1]} - ${m[2]:.2f}" for m in medicines}
+    col1, col2, col3 = st.columns([2,1,1])
+    with col1:
+        med_id = st.selectbox("Medicine", list(med_opts.keys()), format_func=lambda x: med_opts[x], key="quot_med")
+        med = next(m for m in medicines if m[0] == med_id)
+    with col2:
+        qty = st.number_input("Quantity", min_value=1, value=1, key="quot_qty")
+    if st.button("Add Item"):
+        st.session_state.quotation_items.append({
+            "medicine_id": med_id,
+            "name": med[1],
+            "quantity": qty,
+            "price": med[2],
+            "total": med[2] * qty
+        })
+        st.rerun()
+    if st.session_state.quotation_items:
+        df = pd.DataFrame(st.session_state.quotation_items)
+        st.dataframe(df)
+        total = sum(item['total'] for item in st.session_state.quotation_items)
+        st.write(f"**Total: ${total:.2f}**")
+        valid_until = st.date_input("Valid Until", datetime.now().date() + timedelta(days=30))
+        if st.button("Create Quotation"):
+            quot_no = f"QT{datetime.now().strftime('%Y%m%d%H%M%S')}"
+            items_json = json.dumps(st.session_state.quotation_items)
+            with get_db_connection() as conn:
+                conn.execute("""
+                    INSERT INTO quotations (quotation_no, patient_id, items, total_amount, valid_until, created_by)
+                    VALUES (?,?,?,?,?,?)
+                """, (quot_no, patient_id, items_json, total, valid_until, st.session_state.user['id']))
+                conn.commit()
+            st.success(f"Quotation {quot_no} created")
+            st.session_state.quotation_items = []
+            # Generate PDF
+            pdf = FPDF()
+            pdf.add_page()
+            pdf.set_font("Arial", "B", 16)
+            pdf.cell(200, 10, "Quotation", ln=1, align='C')
+            pdf.set_font("Arial", "", 12)
+            pdf.cell(200, 10, f"Number: {quot_no}", ln=1)
+            pdf.cell(200, 10, f"Date: {datetime.now().strftime('%Y-%m-%d')}", ln=1)
+            pdf.cell(200, 10, f"Valid Until: {valid_until}", ln=1)
+            pdf.ln(10)
+            pdf.set_font("Arial", "B", 10)
+            pdf.cell(80, 10, "Item", 1)
+            pdf.cell(30, 10, "Qty", 1)
+            pdf.cell(40, 10, "Price", 1)
+            pdf.cell(40, 10, "Total", 1)
+            pdf.ln()
+            pdf.set_font("Arial", "", 10)
+            for it in st.session_state.quotation_items:
+                pdf.cell(80, 10, it['name'][:30], 1)
+                pdf.cell(30, 10, str(it['quantity']), 1)
+                pdf.cell(40, 10, f"${it['price']:.2f}", 1)
+                pdf.cell(40, 10, f"${it['total']:.2f}", 1)
+                pdf.ln()
+            pdf.ln(5)
+            pdf.cell(150, 10, "Total:", 0)
+            pdf.cell(40, 10, f"${total:.2f}", 0)
+            pdf_bytes = pdf.output(dest='S').encode('latin1')
+            st.download_button("Download Quotation PDF", data=pdf_bytes, file_name=f"quotation_{quot_no}.pdf", mime="application/pdf")
+            st.rerun()
+
+def render_utilities():
+    require_permission("all")
+    st.title("🛠️ Utilities")
+    st.markdown("""
+    - **Printer Setup** – Configure printers for receipts and labels
+    - **Change Password** – Update your login password
+    - **Logout** – End your session
+    - **Exit** – Simulated application exit
+    """)
+    if st.button("Go to Printer Setup"):
+        st.session_state.page = "Printer Setup"
+        st.rerun()
+    if st.button("Change Password"):
+        st.session_state.page = "Change Password"
+        st.rerun()
+    if st.button("Logout"):
+        logout_user()
+    if st.button("Exit"):
+        st.warning("Exiting application... (simulated)")
+        logout_user()
+
+def render_license_expiry():
+    require_permission("all")
+    st.title("📅 License Expiry")
+    # Simulate license expiry check
+    expiry_date = date(2025, 12, 31)
+    days_left = (expiry_date - date.today()).days
+    if days_left < 0:
+        st.error("⚠️ License has expired! Please renew immediately.")
+    elif days_left < 30:
+        st.warning(f"⚠️ License expires in {days_left} days. Please renew soon.")
+    else:
+        st.success(f"License is valid until {expiry_date} ({days_left} days remaining).")
+
 # ==================== MAIN ====================
 def main():
     st.set_page_config(
@@ -1462,11 +2071,6 @@ def main():
     st.markdown("""
     <meta name="description" content="Complete Pharmacy Management System with inventory, sales, prescriptions, AI assistant, and full reporting. Secure, accessible, and production-ready.">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:;">
-    <meta http-equiv="Strict-Transport-Security" content="max-age=31536000; includeSubDomains; preload">
-    <meta http-equiv="Cross-Origin-Opener-Policy" content="same-origin">
-    <meta http-equiv="Cross-Origin-Embedder-Policy" content="require-corp">
-    <meta http-equiv="Trusted-Types" content="allow-duplicates;">
     <main role="main" style="display:block">
     """, unsafe_allow_html=True)
 
@@ -1541,11 +2145,14 @@ def main():
     st.sidebar.title(f"Welcome, {st.session_state.user['full_name']}")
     st.sidebar.write(f"Role: {st.session_state.user['role_name']}")
 
+    # Define all menu items
     menu_items = {
         "Dashboard": "all",
         "Medicines": "medicines",
         "Inventory": "inventory",
+        "Stocktake": "inventory",
         "Patients": "patients_view",
+        "Medical Aid Societies": "patients_view",
         "Prescriptions": "prescriptions",
         "Sales & Billing": "sales",
         "Sales Returns": "sales",
@@ -1557,7 +2164,15 @@ def main():
         "Audit Logs": "audit",
         "Advanced Features": "advanced",
         "AI Assistant": "all",
-        "Settings": "all"
+        "Settings": "all",
+        "Printer Setup": "all",
+        "Change Password": "all",
+        "Calculator": "all",
+        "Tariffs": "all",
+        "Merge Patients": "patients_view",
+        "Quotation": "sales",
+        "Utilities": "all",
+        "License Expiry": "all"
     }
 
     user_perms = json.loads(st.session_state.user.get('permissions', '{}'))
@@ -1580,8 +2195,12 @@ def main():
         render_medicines()
     elif page == "Inventory":
         render_inventory()
+    elif page == "Stocktake":
+        render_stocktake()
     elif page == "Patients":
         render_patients()
+    elif page == "Medical Aid Societies":
+        render_medical_aid_societies()
     elif page == "Prescriptions":
         render_prescriptions()
     elif page == "Sales & Billing":
@@ -1606,10 +2225,43 @@ def main():
         render_ai_assistant()
     elif page == "Settings":
         render_settings()
+    elif page == "Printer Setup":
+        render_printer_setup()
+    elif page == "Change Password":
+        render_change_password()
+    elif page == "Calculator":
+        render_calculator()
+    elif page == "Tariffs":
+        render_tariffs()
+    elif page == "Merge Patients":
+        render_merge_patients()
+    elif page == "Quotation":
+        render_quotation()
+    elif page == "Utilities":
+        render_utilities()
+    elif page == "License Expiry":
+        render_license_expiry()
     else:
         render_dashboard()
 
     st.markdown("</main>", unsafe_allow_html=True)
+
+# The change_password function is already defined; we reuse it.
+def render_change_password():
+    require_permission("all")
+    st.title("🔑 Change Password")
+    new_pass = st.text_input("New Password", type="password")
+    confirm_pass = st.text_input("Confirm Password", type="password")
+    if st.button("Update"):
+        if new_pass != confirm_pass:
+            st.error("Passwords do not match")
+        else:
+            try:
+                change_password(st.session_state.user['id'], new_pass)
+                st.success("Password changed. Please log in again.")
+                logout_user()
+            except ValueError as e:
+                st.error(str(e))
 
 if __name__ == "__main__":
     main()
